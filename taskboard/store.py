@@ -340,6 +340,32 @@ class Store:
         self.conn.commit()
 
     # ── 派生视图 ────────────────────────────────────────────────────────
+    @staticmethod
+    def _order_by_dependency(tasks: list[dict]) -> list[dict]:
+        """按依赖拓扑排序,让列表读起来就是执行顺序。
+
+        创建号只反映"什么时候想到的",后补的前置任务会排在被它阻塞的任务后面。
+        这里让每个任务排在其全部前置之后,同层按创建号稳定排序;成环时把剩余
+        任务按创建号原样收尾,不丢任务。
+        """
+        by_ref = {task['ref']: task for task in tasks}
+        pending = sorted(by_ref)
+        emitted: list[dict] = []
+        emitted_refs: set[int] = set()
+        while pending:
+            ready = [
+                ref for ref in pending
+                if all(dep not in by_ref or dep in emitted_refs
+                       for dep in by_ref[ref]['blocked_by'])
+            ]
+            if not ready:  # 成环:剩余按创建号收尾
+                ready = pending
+            for ref in ready:
+                emitted.append(by_ref[ref])
+                emitted_refs.add(ref)
+            pending = [ref for ref in pending if ref not in emitted_refs]
+        return emitted
+
     def snapshot(self, include_archived: bool = False) -> dict:
         """渲染与 `board next` 共用的完整状态快照。"""
         data = {'generated_at': now_iso(), 'db': str(self.path), 'projects': []}
@@ -368,6 +394,7 @@ class Store:
                     'actionable': task['status'] in OPEN_STATUSES and not open_blockers,
                     'updated_at': task['updated_at'],
                 })
+            tasks = self._order_by_dependency(tasks)
             counts = {status: 0 for status in STATUSES}
             for task in tasks:
                 counts[task['status']] += 1

@@ -323,7 +323,7 @@ def cmd_export(store: Store, args) -> int:
 def cmd_serve(store: Store, args) -> int:
     from .serve import serve
     serve(store, host=args.host, port=args.port, title=args.title,
-          include_archived=args.all, open_browser=args.open)
+          include_archived=args.all, open_browser=args.open, dev=args.dev)
     return 0
 
 
@@ -451,6 +451,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument('--title', default='任务看板')
     sp.add_argument('--all', action='store_true', help='含已归档项目')
     sp.add_argument('--open', action='store_true', help='顺便打开浏览器')
+    sp.add_argument('--dev', action='store_true',
+                    help='开发模式:改代码免重启,保存后页面自动刷新')
     sp.set_defaults(func=cmd_serve)
 
     return parser
