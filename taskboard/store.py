@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS notes (
     metric      TEXT,
     created_at  TEXT NOT NULL
 );
+-- superseded_by:被哪条记录推翻(NULL=当前有效)。旧结论不删除,保留
+-- "曾经这么认为、被什么推翻"这条信息,防止在同一问题上反复改判。
 CREATE TABLE IF NOT EXISTS events (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     project     TEXT,
@@ -91,7 +93,16 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA foreign_keys = ON')
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self) -> None:
+        """就地补列:老库直接用新版本打开即可,不需要单独的迁移命令。"""
+        columns = {row['name'] for row in self.conn.execute('PRAGMA table_info(notes)')}
+        if 'superseded_by' not in columns:
+            self.conn.execute('ALTER TABLE notes ADD COLUMN superseded_by INTEGER')
+        if 'superseded_at' not in columns:
+            self.conn.execute('ALTER TABLE notes ADD COLUMN superseded_at TEXT')
 
     def close(self) -> None:
         self.conn.close()
@@ -310,36 +321,111 @@ class Store:
 
     # ── 结论 / 风险 ─────────────────────────────────────────────────────
     def add_note(self, project: str, kind: str, title: str,
-                 body: str | None = None, metric: str | None = None) -> sqlite3.Row:
+                 body: str | None = None, metric: str | None = None,
+                 supersedes: list[int] | None = None) -> sqlite3.Row:
         self.get_project(project)
         if kind not in NOTE_KINDS:
             raise BoardError(f'类型只能是 {"/".join(NOTE_KINDS)},收到 {kind}')
+        # 先校验待推翻的记录,避免建了新记录才发现引用有误
+        targets = [self.get_note(note_id) for note_id in supersedes or []]
+        for target in targets:
+            if target['project'] != project:
+                raise BoardError(f'记录 {target["id"]} 属于项目 {target["project"]},不能跨项目推翻')
         cursor = self.conn.execute(
             'INSERT INTO notes (project, kind, title, body, metric, created_at) VALUES (?,?,?,?,?,?)',
             (project, kind, title, body, metric, now_iso()),
         )
+        note_id = cursor.lastrowid
         self.log_event('note_added', project=project, kind=kind, title=title)
+        for target in targets:
+            self._supersede(target, note_id)
         self.conn.commit()
-        return self.conn.execute('SELECT * FROM notes WHERE id = ?', (cursor.lastrowid,)).fetchone()
+        return self.get_note(note_id)
 
-    def notes(self, project: str, kind: str | None = None) -> list[sqlite3.Row]:
+    def get_note(self, note_id: int) -> sqlite3.Row:
+        row = self.conn.execute('SELECT * FROM notes WHERE id = ?', (note_id,)).fetchone()
+        if row is None:
+            raise BoardError(f'没有这条记录: {note_id}')
+        return row
+
+    def _supersede(self, target: sqlite3.Row, by_note_id: int) -> None:
+        if target['id'] == by_note_id:
+            raise BoardError('记录不能推翻自己')
+        if target['superseded_by'] is not None:
+            raise BoardError(
+                f'记录 {target["id"]} 已被 {target["superseded_by"]} 推翻,'
+                f'请改推翻最新那条'
+            )
+        self.conn.execute(
+            'UPDATE notes SET superseded_by = ?, superseded_at = ? WHERE id = ?',
+            (by_note_id, now_iso(), target['id']),
+        )
+        self.log_event('note_superseded', project=target['project'],
+                       note_id=target['id'], by=by_note_id, title=target['title'])
+
+    def supersede_note(self, note_id: int, by_note_id: int) -> sqlite3.Row:
+        """把已有的两条记录连成"新推翻旧"(用于事后补关系)。"""
+        target = self.get_note(note_id)
+        replacement = self.get_note(by_note_id)
+        if target['project'] != replacement['project']:
+            raise BoardError('两条记录不在同一项目,不能建立推翻关系')
+        self._supersede(target, replacement['id'])
+        self.conn.commit()
+        return self.get_note(note_id)
+
+    def restore_note(self, note_id: int) -> sqlite3.Row:
+        """撤销推翻标记(误标时用)。"""
+        target = self.get_note(note_id)
+        if target['superseded_by'] is None:
+            raise BoardError(f'记录 {note_id} 本来就是有效的')
+        self.conn.execute(
+            'UPDATE notes SET superseded_by = NULL, superseded_at = NULL WHERE id = ?',
+            (note_id,),
+        )
+        self.log_event('note_restored', project=target['project'], note_id=note_id)
+        self.conn.commit()
+        return self.get_note(note_id)
+
+    def notes(self, project: str, kind: str | None = None,
+              include_superseded: bool = True) -> list[sqlite3.Row]:
         sql = 'SELECT * FROM notes WHERE project = ?'
         args: list = [project]
         if kind:
             sql += ' AND kind = ?'
             args.append(kind)
+        if not include_superseded:
+            sql += ' AND superseded_by IS NULL'
         sql += ' ORDER BY id'
         return list(self.conn.execute(sql, args))
 
     def delete_note(self, note_id: int) -> None:
-        row = self.conn.execute('SELECT * FROM notes WHERE id = ?', (note_id,)).fetchone()
-        if row is None:
-            raise BoardError(f'没有这条记录: {note_id}')
+        row = self.get_note(note_id)
+        # 被删的那条可能正推翻着别人:先把指向它的标记清掉,否则旧结论会永远
+        # 停在"已被某条不存在的记录推翻"
+        self.conn.execute(
+            'UPDATE notes SET superseded_by = NULL, superseded_at = NULL WHERE superseded_by = ?',
+            (note_id,),
+        )
         self.conn.execute('DELETE FROM notes WHERE id = ?', (note_id,))
         self.log_event('note_deleted', project=row['project'], title=row['title'])
         self.conn.commit()
 
     # ── 派生视图 ────────────────────────────────────────────────────────
+    def _note_dicts(self, project: str, kind: str) -> list[dict]:
+        """带上推翻关系:superseded_by(被谁推翻)与 supersedes(推翻了谁)。
+
+        有效记录在前、被推翻的沉底,让读的人先看到当前结论。
+        """
+        rows = [dict(row) for row in self.notes(project, kind)]
+        overturned: dict[int, list[int]] = {}
+        for row in rows:
+            if row['superseded_by'] is not None:
+                overturned.setdefault(row['superseded_by'], []).append(row['id'])
+        for row in rows:
+            row['supersedes'] = sorted(overturned.get(row['id'], []))
+            row['is_superseded'] = row['superseded_by'] is not None
+        return sorted(rows, key=lambda row: (row['is_superseded'], row['id']))
+
     @staticmethod
     def _order_by_dependency(tasks: list[dict]) -> list[dict]:
         """按依赖拓扑排序,让列表读起来就是执行顺序。
@@ -407,9 +493,9 @@ class Store:
                 'counts': counts,
                 'gates': [t['ref'] for t in tasks if t['gate'] and t['status'] != 'done'],
                 'tasks': tasks,
-                'findings': [dict(row) for row in self.notes(key, 'finding')],
-                'risks': [dict(row) for row in self.notes(key, 'risk')],
-                'links': [dict(row) for row in self.notes(key, 'link')],
+                'findings': self._note_dicts(key, 'finding'),
+                'risks': self._note_dicts(key, 'risk'),
+                'links': self._note_dicts(key, 'link'),
                 'updated_at': project['updated_at'],
             })
         return data

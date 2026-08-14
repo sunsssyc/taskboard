@@ -114,6 +114,14 @@ section { display:flex; flex-direction:column; gap:14px; }
 .note h4 { margin:0; font-size:13.5px; font-weight:620; }
 .note p { margin:0; font-family:var(--serif); font-size:14px; line-height:1.6; color:var(--ink-muted); }
 .note .metric { font-family:var(--mono); font-size:11.5px; font-variant-numeric:tabular-nums; color:var(--accent); }
+.note .overturns { font-family:var(--mono); font-size:11px; color:var(--ink-faint); }
+.note.superseded { grid-column:1/-1; background:var(--sunken); border-style:dashed; padding:9px 14px; }
+.note.superseded summary { cursor:pointer; font-size:13px; color:var(--ink-faint); list-style-position:outside; }
+.note.superseded summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.note.superseded .tag { font-family:var(--mono); font-size:10.5px; letter-spacing:.05em;
+                        color:var(--alert); border:1px solid var(--rule); border-radius:2px;
+                        padding:1px 6px; margin-right:7px; white-space:nowrap; }
+.note.superseded p { margin-top:8px; font-size:13.5px; }
 .linklist { display:flex; flex-direction:column; gap:5px; font-size:13.5px; color:var(--ink-muted); }
 .linklist code { font-family:var(--mono); font-size:12.5px; background:var(--sunken); padding:1px 5px;
                  border-radius:2px; color:var(--ink); overflow-wrap:anywhere; }
@@ -214,10 +222,20 @@ def _task_card(task: dict) -> str:
 
 
 def _note_card(note: dict, kind: str) -> str:
+    if note.get('is_superseded'):
+        # 折叠成一行:保留"曾经这么认为"的痕迹,但不与当前结论争夺注意力
+        return f"""      <details class="note superseded">
+        <summary><span class="tag">已被 [{note['superseded_by']}] 推翻</span> {esc(note['title'])}</summary>
+        {f'<p>{esc(note["body"])}</p>' if note.get('body') else ''}
+      </details>"""
     metric = f'<div class="metric">{esc(note["metric"])}</div>' if note.get('metric') else ''
     body = f'<p>{esc(note["body"])}</p>' if note.get('body') else ''
+    overturns = (
+        f'<div class="overturns">推翻了 {", ".join("[" + str(i) + "]" for i in note["supersedes"])}</div>'
+        if note.get('supersedes') else ''
+    )
     return f"""      <div class="note {kind}">
-        <h4>{esc(note['title'])}</h4>{metric}{body}
+        <h4>{esc(note['title'])}</h4>{metric}{body}{overturns}
       </div>"""
 
 

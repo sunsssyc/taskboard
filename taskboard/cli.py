@@ -254,12 +254,18 @@ def cmd_dep(store: Store, args) -> int:
     return 0
 
 
+NOTE_LABEL = {'finding': '结论', 'risk': '尾巴', 'link': '文件'}
+
+
 def _note_cmd(kind: str):
     def handler(store: Store, args) -> int:
         project = resolve_project(store, args.project)
-        note = store.add_note(project, kind, args.title, body=args.body, metric=args.metric)
-        label = {'finding': '结论', 'risk': '尾巴', 'link': '文件'}[kind]
-        print(f'{label} [{note["id"]}] {note["title"]}')
+        supersedes = _refs(getattr(args, 'supersedes', None))
+        note = store.add_note(project, kind, args.title, body=args.body,
+                              metric=args.metric, supersedes=supersedes)
+        print(f'{NOTE_LABEL[kind]} [{note["id"]}] {note["title"]}')
+        for old_id in supersedes:
+            print(paint(f'  ↳ 推翻了 [{old_id}]', DIM))
         return 0
     return handler
 
@@ -268,15 +274,42 @@ def cmd_notes(store: Store, args) -> int:
     project = resolve_project(store, args.project)
     labels = {'finding': '约束性结论', 'risk': '尾巴与风险', 'link': '关键文件'}
     for kind, label in labels.items():
-        notes = store.notes(project, kind)
+        notes = store._note_dicts(project, kind)
+        if not args.superseded:
+            notes = [note for note in notes if not note['is_superseded']]
         if not notes:
             continue
         print(paint(label, BOLD))
         for note in notes:
             metric = paint(f'  {note["metric"]}', DIM) if note['metric'] else ''
-            print(f'  [{note["id"]}] {note["title"]}{metric}')
+            title = note['title']
+            if note['is_superseded']:
+                title = paint(f'{title}(已被 [{note["superseded_by"]}] 推翻)', DIM)
+            print(f'  [{note["id"]}] {title}{metric}')
+            if note['supersedes']:
+                print(paint('      ↳ 推翻了 ' + ', '.join(f'[{i}]' for i in note['supersedes']), DIM))
             if note['body'] and args.verbose:
                 print(paint(f'      {note["body"]}', DIM))
+    if not args.superseded:
+        hidden = sum(
+            1 for kind in labels
+            for note in store._note_dicts(project, kind) if note['is_superseded']
+        )
+        if hidden:
+            print(paint(f'\n另有 {hidden} 条已被推翻 · board notes --superseded 查看', DIM))
+    return 0
+
+
+def cmd_supersede(store: Store, args) -> int:
+    note = store.supersede_note(args.old, args.by)
+    print(f'[{note["id"]}] {note["title"]} → 已标记为被 [{args.by}] 推翻')
+    return 0
+
+
+def cmd_restore(store: Store, args) -> int:
+    for note_id in args.ids:
+        note = store.restore_note(note_id)
+        print(f'[{note["id"]}] {note["title"]} → 恢复为有效')
     return 0
 
 
@@ -419,13 +452,24 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument('title')
         sp.add_argument('--body')
         sp.add_argument('--metric', help='一行关键数字')
+        sp.add_argument('--supersedes', help='推翻哪几条旧记录(id,逗号分隔);旧记录保留但标记失效')
         add_project_flag(sp)
         sp.set_defaults(func=_note_cmd(kind))
 
-    sp = sub.add_parser('notes', help='列结论/尾巴/文件')
+    sp = sub.add_parser('notes', help='列结论/尾巴/文件(默认只列有效的)')
     sp.add_argument('-v', '--verbose', action='store_true')
+    sp.add_argument('--superseded', action='store_true', help='含已被推翻的')
     add_project_flag(sp)
     sp.set_defaults(func=cmd_notes)
+
+    sp = sub.add_parser('supersede', help='事后补推翻关系:old 被 by 推翻')
+    sp.add_argument('old', type=int)
+    sp.add_argument('--by', type=int, required=True)
+    sp.set_defaults(func=cmd_supersede)
+
+    sp = sub.add_parser('restore', help='撤销推翻标记')
+    sp.add_argument('ids', type=int, nargs='+')
+    sp.set_defaults(func=cmd_restore)
 
     sp = sub.add_parser('note-rm', help='删记录')
     sp.add_argument('ids', type=int, nargs='+')
