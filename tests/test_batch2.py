@@ -265,3 +265,31 @@ def test_render_folds_done_tasks_and_shows_accept(store):
     assert '已完成 1 项' in html
     assert '跨月分位稳定' in html
     assert '等人工' in html
+
+
+# ── 项目切换 ────────────────────────────────────────────────────────────
+
+def test_overview_cards_are_toggle_buttons_with_sections_tagged(tmp_path):
+    store = Store(tmp_path / 'switch.db')
+    store.create_project('alpha', '项目甲')
+    store.create_project('beta', '项目乙')
+    store.add_task('alpha', '甲的活')
+    store.add_note('beta', 'finding', '乙的结论')
+    html = render(store.snapshot())
+    store.close()
+
+    # 卡片是按钮而非锚点:页面常被宿主整高渲染,#锚点跳转不会滚动
+    assert '<button type="button" class="pcard" data-project="alpha"' in html
+    assert 'href="#p-alpha"' not in html
+    # 每个 section 都带项目归属,切换时才能整组显隐
+    assert html.count('data-project="beta"') >= 3   # 卡片 + 任务区 + 结论区
+    # display:flex 会压过 UA 的 [hidden]{display:none},必须显式盖回来
+    assert 'section[hidden] { display:none; }' in html
+
+
+def test_single_project_needs_no_switching(tmp_path):
+    store = Store(tmp_path / 'one.db')
+    store.create_project('solo', '独苗')
+    html = render(store.snapshot())
+    store.close()
+    assert 'cards.length < 2' in html   # 脚本自己短路,不给单项目加无意义交互

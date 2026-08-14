@@ -55,11 +55,29 @@ h1 { margin:0; font-size:clamp(25px,4vw,32px); letter-spacing:-.022em; font-weig
 .meta-line { display:flex; flex-wrap:wrap; gap:6px 18px; font-family:var(--mono); font-size:11.5px; color:var(--ink-faint); }
 
 .overview { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
-.pcard { background:var(--surface); border:1px solid var(--rule); border-radius:4px; padding:14px 16px;
-         display:flex; flex-direction:column; gap:9px; box-shadow:var(--shadow); }
-.pcard a { color:inherit; text-decoration:none; }
-.pcard a:hover { color:var(--accent); }
-.pcard a:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:2px; }
+/* 卡片是切换按钮:点它只看该项目,再点一次看全部。
+   不用锚点跳转——页面常被宿主整高渲染,文档自身不滚动,#锚点点了没反应。 */
+.pcard { position:relative; background:var(--surface); border:1px solid var(--rule); border-radius:4px;
+         padding:14px 16px; display:flex; flex-direction:column; gap:9px; box-shadow:var(--shadow);
+         cursor:pointer; text-align:left; font:inherit; color:inherit; width:100%;
+         transition:border-color .15s ease, transform .15s ease; }
+.pcard:hover { border-color:var(--accent); transform:translateY(-1px); }
+.pcard:hover h3 { color:var(--accent); }
+.pcard:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.pcard[aria-pressed="true"] { border-color:var(--accent); box-shadow:inset 3px 0 0 var(--accent), var(--shadow); }
+.pcard[aria-pressed="true"] h3 { color:var(--accent); }
+.overview[data-filtered] .pcard[aria-pressed="false"] { opacity:.5; }
+.filter-note { display:none; align-items:center; gap:10px; font-family:var(--mono); font-size:11.5px;
+               color:var(--ink-faint); }
+.filter-note[data-on] { display:flex; }
+.filter-note button { font:inherit; color:var(--accent); background:none; border:1px solid var(--rule);
+                      border-radius:2px; padding:3px 9px; cursor:pointer; }
+.filter-note button:hover { border-color:var(--accent); }
+.filter-note button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+@media (prefers-reduced-motion: reduce) {
+  .pcard { transition:none; }
+  .pcard:hover { transform:none; }
+}
 .pcard h3 { margin:0; font-size:15px; font-weight:620; letter-spacing:-.006em; }
 .pcard .key { font-family:var(--mono); font-size:11px; color:var(--ink-faint); }
 .bar { height:5px; border-radius:3px; background:var(--sunken); overflow:hidden; display:flex; }
@@ -71,7 +89,12 @@ h1 { margin:0; font-size:clamp(25px,4vw,32px); letter-spacing:-.022em; font-weig
 .nextline { font-size:13px; color:var(--ink-muted); }
 .nextline span { color:var(--ink-faint); }
 
-section { display:flex; flex-direction:column; gap:14px; }
+html { scroll-behavior:smooth; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior:auto; } }
+/* 锚点跳转后标题不贴着视口顶边 */
+section { display:flex; flex-direction:column; gap:14px; scroll-margin-top:18px; }
+/* display:flex 会压过 UA 的 [hidden]{display:none},切换项目时必须显式盖回来 */
+section[hidden] { display:none; }
 .sec-head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; border-bottom:1px solid var(--rule); padding-bottom:9px; }
 .sec-head h2 { margin:0; font-size:17px; font-weight:620; letter-spacing:-.01em; }
 .sec-head .key { font-family:var(--mono); font-size:11.5px; color:var(--ink-faint); }
@@ -142,6 +165,44 @@ footer { border-top:1px solid var(--rule); padding-top:14px; font-family:var(--m
          color:var(--ink-faint); display:flex; flex-wrap:wrap; gap:6px 20px; }
 """
 
+FILTER_SCRIPT = """
+<script>
+(function () {
+  var overview = document.querySelector('.overview');
+  var note = document.querySelector('.filter-note');
+  if (!overview || !note) return;
+  var cards = Array.prototype.slice.call(overview.querySelectorAll('.pcard'));
+  var sections = Array.prototype.slice.call(document.querySelectorAll('section[data-project]'));
+  if (cards.length < 2) return;   // 只有一个项目时没有可切换的对象
+
+  function apply(key) {
+    cards.forEach(function (card) {
+      card.setAttribute('aria-pressed', String(card.dataset.project === key));
+    });
+    sections.forEach(function (section) {
+      section.hidden = Boolean(key) && section.dataset.project !== key;
+    });
+    if (key) {
+      overview.setAttribute('data-filtered', '');
+      note.setAttribute('data-on', '');
+      note.querySelector('span').textContent = '只看 ' + key;
+    } else {
+      overview.removeAttribute('data-filtered');
+      note.removeAttribute('data-on');
+    }
+  }
+
+  cards.forEach(function (card) {
+    card.addEventListener('click', function () {
+      var already = card.getAttribute('aria-pressed') === 'true';
+      apply(already ? null : card.dataset.project);   // 再点一次回到全部
+    });
+  });
+  note.querySelector('button').addEventListener('click', function () { apply(null); });
+})();
+</script>
+"""
+
 LIVE_SCRIPT = """
 <script>
 (function () {
@@ -196,13 +257,13 @@ def _overview_card(project: dict) -> str:
         f'<div class="nextline"><span>闸门</span> #{", #".join(str(g) for g in project["gates"])}</div>'
         if project['gates'] else ''
     )
-    return f"""      <div class="pcard">
+    return f"""      <button type="button" class="pcard" data-project="{esc(project['key'])}" aria-pressed="false">
         <div class="key">{esc(project['key'])}</div>
-        <h3><a href="#p-{esc(project['key'])}">{esc(project['name'])}</a></h3>
+        <h3>{esc(project['name'])}</h3>
         <div class="bar"><i class="done" style="width:{done_pct:.1f}%"></i><i class="active" style="width:{active_pct:.1f}%"></i></div>
         <div class="counts"><span>完成 <b>{counts['done']}</b></span><span>进行 <b>{counts['active']}</b></span>{f"<span>等人工 <b>{counts['waiting']}</b></span>" if counts.get('waiting') else ''}<span>待办 <b>{counts['todo']}</b></span></div>
         {next_html}{gates}
-      </div>"""
+      </button>"""
 
 
 def _task_card(task: dict) -> str:
@@ -273,7 +334,7 @@ def _project_section(project: dict) -> str:
 {folded}
         </details>"""
     spine = spine or '<p class="empty">还没有任务。</p>'
-    blocks = [f"""    <section id="p-{esc(project['key'])}">
+    blocks = [f"""    <section id="p-{esc(project['key'])}" data-project="{esc(project['key'])}">
       <div class="sec-head">
         <h2>{esc(project['name'])}</h2>
         <span class="key">{esc(project['key'])}{' · ' + esc(project['repo']) if project['repo'] else ''}</span>
@@ -286,7 +347,7 @@ def _project_section(project: dict) -> str:
 
     if project['findings']:
         cards = '\n'.join(_note_card(note, 'finding') for note in project['findings'])
-        blocks.append(f"""    <section>
+        blocks.append(f"""    <section data-project="{esc(project['key'])}">
       <div class="sec-head"><h2>约束性结论</h2><span class="key">{esc(project['key'])} · 已判定,不再推演</span></div>
       <div class="notes">
 {cards}
@@ -295,7 +356,7 @@ def _project_section(project: dict) -> str:
 
     if project['risks']:
         cards = '\n'.join(_note_card(note, 'risk') for note in project['risks'])
-        blocks.append(f"""    <section>
+        blocks.append(f"""    <section data-project="{esc(project['key'])}">
       <div class="sec-head"><h2>尾巴与风险</h2><span class="key">{esc(project['key'])}</span></div>
       <div class="notes">
 {cards}
@@ -307,7 +368,7 @@ def _project_section(project: dict) -> str:
             f'        <div><code>{esc(note["title"])}</code> {esc(note.get("body") or "")}</div>'
             for note in project['links']
         )
-        blocks.append(f"""    <section>
+        blocks.append(f"""    <section data-project="{esc(project['key'])}">
       <div class="sec-head"><h2>关键文件</h2><span class="key">{esc(project['key'])}</span></div>
       <div class="linklist">
 {items}
@@ -351,6 +412,8 @@ def render(snapshot: dict, title: str = '任务看板', live: bool = False) -> s
 {overview}
   </div>
 
+  <div class="filter-note"><span></span><button type="button">显示全部项目</button></div>
+
 {sections}
 
   <footer>
@@ -358,7 +421,7 @@ def render(snapshot: dict, title: str = '任务看板', live: bool = False) -> s
     <span>{esc(snapshot.get('db', ''))}</span>
   </footer>
 </div>
-{LIVE_SCRIPT if live else ''}
+{FILTER_SCRIPT}{LIVE_SCRIPT if live else ''}
 """
 
 
