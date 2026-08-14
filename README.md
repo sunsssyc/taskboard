@@ -27,15 +27,31 @@ board add "发版" --gate --blocked-by 2        # --gate 标记闸门/关键节�
 
 # 推进
 board start 1
-board done 1                                  # 完成后会提示"解锁了谁"
+board wait 1                                  # 卡在人工/外部动作上(服务器执行、等发版)
+board done 1                                  # 提示解锁了谁、打印验收条件、记录完成时 HEAD
 
 # 看
+board brief               # 交接摘要:新会话读这一段就能接上
+board next                # 现在能开工的(--owner 我 只看自己的)
 board ls                  # 当前项目未完成任务(--done 含已完成,-A 所有项目)
-board next                # 现在能开工的:未完成且无未决前置
+board find <关键词>        # 搜任务与记录
+board stale --days 3      # 停滞的在办任务
 board projects            # 所有项目的进度概览
 board show 3              # 单个任务详情
 board log                 # 变更历史
 ```
+
+`todo`(没开工)、`active`(我在做)、`waiting`(等人工)三态分开:`waiting` 不算
+"可开工",因为它等的是人不是我;`board next` 会把它单列成"等人工"。
+
+任务可以带验收条件与代码坐标:
+
+```bash
+board add "全量重导" --accept "三张审计表全过" --branch codex/foo --pr 96
+```
+
+`--accept` 在 `board done` 时打印出来对照,`board done` 还会把当时的 HEAD sha 记进
+事件流(任务字段里存 sha 会被 squash/rebase 弄失效,事件流才是可靠出处)。
 
 ## 三类记录,不只是任务
 
@@ -58,10 +74,11 @@ board notes -v            # 一起看
 board serve --open        # localhost:8787,CLI 一改 2 秒内自动刷新
 board export --out board.html
 board export --json --out board.json   # 给其他工具消费
+board set --artifact-url https://...   # 记住发布链接,export 时提醒复用
 ```
 
 导出的 HTML 自包含、无外部请求,可直接作为 Artifact 发布或丢进任何静态托管。
-明暗主题跟随系统。
+明暗主题跟随系统;已完成的任务折进一个可展开区块,页面只显示剩余路径。
 
 ## 寻址规则
 
@@ -81,5 +98,9 @@ python3 -m pytest tests -q
 ```
 
 数据模型:`projects` / `tasks`(项目内 ref 唯一)/ `deps`(建边时拒绝成环)/
-`notes`(finding·risk·link)/ `events`(只追加的变更流)。渲染与 `board next`
-共用 `Store.snapshot()`,阻塞判定与"可开工"只有这一处实现。
+`notes`(finding·risk·link,支持 supersede)/ `events`(只追加的变更流)。
+渲染与 `board next` 共用 `Store.snapshot()`,阻塞判定与"可开工"只有这一处实现。
+
+并发:WAL + `busy_timeout`,`ref` 分配在 `BEGIN IMMEDIATE` 写锁下完成,配合
+`UNIQUE(project, ref)` 双保险,多个 CLI 进程同时写不会重号。
+升级:新版本打开老库会自动补列,不需要单独的迁移命令。

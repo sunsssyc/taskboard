@@ -8,12 +8,16 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-STATUSES = ('todo', 'active', 'done', 'dropped')
-OPEN_STATUSES = ('todo', 'active')
+# waiting = 卡在人工/外部动作上(服务器执行、页面操作、等发版),我推不动;
+# 与"被依赖阻塞"是两回事,前者等的是人,后者等的是别的任务。
+STATUSES = ('todo', 'active', 'waiting', 'done', 'dropped')
+OPEN_STATUSES = ('todo', 'active', 'waiting')
+ACTIONABLE_STATUSES = ('todo', 'active')
 NOTE_KINDS = ('finding', 'risk', 'link')
+DEFAULT_STALE_DAYS = 3
 
 
 def home_dir() -> Path:
@@ -30,13 +34,14 @@ def now_iso() -> str:
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS projects (
-    key         TEXT PRIMARY KEY,
-    name        TEXT NOT NULL,
-    repo        TEXT,
-    summary     TEXT,
-    archived    INTEGER NOT NULL DEFAULT 0,
-    created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    key          TEXT PRIMARY KEY,
+    name         TEXT NOT NULL,
+    repo         TEXT,
+    summary      TEXT,
+    artifact_url TEXT,
+    archived     INTEGER NOT NULL DEFAULT 0,
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS tasks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -44,9 +49,12 @@ CREATE TABLE IF NOT EXISTS tasks (
     ref         INTEGER NOT NULL,
     title       TEXT NOT NULL,
     detail      TEXT,
+    accept      TEXT,
     status      TEXT NOT NULL DEFAULT 'todo',
     owner       TEXT,
     gate        INTEGER NOT NULL DEFAULT 0,
+    branch      TEXT,
+    pr          TEXT,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
     UNIQUE (project, ref)
@@ -92,17 +100,25 @@ class Store:
         self.conn = sqlite3.connect(str(self.path))
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA foreign_keys = ON')
+        # WAL:读不挡写、写不挡读,多个 CLI 进程与 serve 并存时不会互相卡死;
+        # busy_timeout:抢锁时等待而不是立刻抛 database is locked
+        self.conn.execute('PRAGMA journal_mode = WAL')
+        self.conn.execute('PRAGMA busy_timeout = 5000')
         self.conn.executescript(SCHEMA)
         self._migrate()
         self.conn.commit()
 
+    def _add_columns(self, table: str, columns: dict[str, str]) -> None:
+        existing = {row['name'] for row in self.conn.execute(f'PRAGMA table_info({table})')}
+        for name, decl in columns.items():
+            if name not in existing:
+                self.conn.execute(f'ALTER TABLE {table} ADD COLUMN {name} {decl}')
+
     def _migrate(self) -> None:
         """就地补列:老库直接用新版本打开即可,不需要单独的迁移命令。"""
-        columns = {row['name'] for row in self.conn.execute('PRAGMA table_info(notes)')}
-        if 'superseded_by' not in columns:
-            self.conn.execute('ALTER TABLE notes ADD COLUMN superseded_by INTEGER')
-        if 'superseded_at' not in columns:
-            self.conn.execute('ALTER TABLE notes ADD COLUMN superseded_at TEXT')
+        self._add_columns('notes', {'superseded_by': 'INTEGER', 'superseded_at': 'TEXT'})
+        self._add_columns('tasks', {'accept': 'TEXT', 'branch': 'TEXT', 'pr': 'TEXT'})
+        self._add_columns('projects', {'artifact_url': 'TEXT'})
 
     def close(self) -> None:
         self.conn.close()
@@ -158,7 +174,7 @@ class Store:
 
     def update_project(self, key: str, **fields) -> sqlite3.Row:
         project = self.get_project(key)
-        allowed = {'name', 'repo', 'summary', 'archived'}
+        allowed = {'name', 'repo', 'summary', 'archived', 'artifact_url'}
         sets, args = [], []
         for field, value in fields.items():
             if field not in allowed or value is None:
@@ -192,22 +208,33 @@ class Store:
     # ── 任务 ────────────────────────────────────────────────────────────
     def add_task(self, project: str, title: str, detail: str | None = None,
                  owner: str | None = None, gate: bool = False,
-                 blocked_by: list[int] | None = None) -> sqlite3.Row:
+                 blocked_by: list[int] | None = None, accept: str | None = None,
+                 branch: str | None = None, pr: str | None = None) -> sqlite3.Row:
         self.get_project(project)
-        next_ref = (self.conn.execute(
-            'SELECT COALESCE(MAX(ref), 0) + 1 FROM tasks WHERE project = ?', (project,),
-        ).fetchone()[0])
-        stamp = now_iso()
-        cursor = self.conn.execute(
-            'INSERT INTO tasks (project, ref, title, detail, status, owner, gate,'
-            ' created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
-            (project, next_ref, title, detail, 'todo', owner, int(bool(gate)), stamp, stamp),
-        )
-        task_id = cursor.lastrowid
-        for blocker_ref in blocked_by or []:
-            self._add_dep(task_id, self.get_task(project, blocker_ref)['id'])
-        self.log_event('task_added', project=project, task_ref=next_ref, title=title)
-        self.conn.commit()
+        # ref 是"读 MAX+1 再插":必须在写锁下完成,否则两个进程会算出同一个号。
+        # BEGIN IMMEDIATE 在读之前就拿写锁,配合 UNIQUE(project, ref) 双保险。
+        in_transaction = self.conn.in_transaction
+        if not in_transaction:
+            self.conn.execute('BEGIN IMMEDIATE')
+        try:
+            next_ref = (self.conn.execute(
+                'SELECT COALESCE(MAX(ref), 0) + 1 FROM tasks WHERE project = ?', (project,),
+            ).fetchone()[0])
+            stamp = now_iso()
+            cursor = self.conn.execute(
+                'INSERT INTO tasks (project, ref, title, detail, accept, status, owner, gate,'
+                ' branch, pr, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
+                (project, next_ref, title, detail, accept, 'todo', owner, int(bool(gate)),
+                 branch, pr, stamp, stamp),
+            )
+            task_id = cursor.lastrowid
+            for blocker_ref in blocked_by or []:
+                self._add_dep(task_id, self.get_task(project, blocker_ref)['id'])
+            self.log_event('task_added', project=project, task_ref=next_ref, title=title)
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
         return self.get_task(project, next_ref)
 
     def get_task(self, project: str, ref: int) -> sqlite3.Row:
@@ -225,7 +252,8 @@ class Store:
         sql += ' ORDER BY ref'
         return list(self.conn.execute(sql, (project,)))
 
-    def set_status(self, project: str, ref: int, status: str) -> sqlite3.Row:
+    def set_status(self, project: str, ref: int, status: str,
+                   commit_sha: str | None = None) -> sqlite3.Row:
         if status not in STATUSES:
             raise BoardError(f'状态只能是 {"/".join(STATUSES)},收到 {status}')
         task = self.get_task(project, ref)
@@ -233,14 +261,18 @@ class Store:
             'UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?',
             (status, now_iso(), task['id']),
         )
-        self.log_event('status_changed', project=project, task_ref=ref,
-                       old=task['status'], new=status)
+        payload = {'old': task['status'], 'new': status}
+        if commit_sha:
+            # 记在事件流里而不是任务上:squash/rebase 会让任务字段里的 sha 失效,
+            # 事件流至少留下"完成时 HEAD 在哪"这个事实
+            payload['commit'] = commit_sha
+        self.log_event('status_changed', project=project, task_ref=ref, **payload)
         self.conn.commit()
         return self.get_task(project, ref)
 
     def update_task(self, project: str, ref: int, **fields) -> sqlite3.Row:
         task = self.get_task(project, ref)
-        allowed = {'title', 'detail', 'owner', 'gate'}
+        allowed = {'title', 'detail', 'owner', 'gate', 'accept', 'branch', 'pr'}
         sets, args = [], []
         for field, value in fields.items():
             if field not in allowed or value is None:
@@ -469,15 +501,19 @@ class Store:
                     'ref': task['ref'],
                     'title': task['title'],
                     'detail': task['detail'],
+                    'accept': task['accept'],
                     'status': task['status'],
                     'owner': task['owner'],
                     'gate': bool(task['gate']),
+                    'branch': task['branch'],
+                    'pr': task['pr'],
                     'blocked_by': blockers,
                     'open_blockers': open_blockers,
                     'blocks': sorted(
                         other for other, refs in deps.items() if task['ref'] in refs
                     ),
-                    'actionable': task['status'] in OPEN_STATUSES and not open_blockers,
+                    # waiting 卡在人工动作上,不算"能开工"——它要的是人不是我
+                    'actionable': task['status'] in ACTIONABLE_STATUSES and not open_blockers,
                     'updated_at': task['updated_at'],
                 })
             tasks = self._order_by_dependency(tasks)
@@ -489,8 +525,10 @@ class Store:
                 'name': project['name'],
                 'repo': project['repo'],
                 'summary': project['summary'],
+                'artifact_url': project['artifact_url'],
                 'archived': bool(project['archived']),
                 'counts': counts,
+                'waiting': [t['ref'] for t in tasks if t['status'] == 'waiting'],
                 'gates': [t['ref'] for t in tasks if t['gate'] and t['status'] != 'done'],
                 'tasks': tasks,
                 'findings': self._note_dicts(key, 'finding'),
@@ -499,3 +537,49 @@ class Store:
                 'updated_at': project['updated_at'],
             })
         return data
+
+    # ── 检索 ────────────────────────────────────────────────────────────
+    def search(self, keyword: str, project: str | None = None) -> dict:
+        """在任务标题/正文/验收条件与记录标题/正文里找关键词,大小写不敏感。"""
+        like = f'%{keyword.lower()}%'
+        task_sql = (
+            'SELECT * FROM tasks WHERE (LOWER(title) LIKE ? OR LOWER(COALESCE(detail, "")) LIKE ?'
+            ' OR LOWER(COALESCE(accept, "")) LIKE ?)'
+        )
+        note_sql = (
+            'SELECT * FROM notes WHERE (LOWER(title) LIKE ? OR LOWER(COALESCE(body, "")) LIKE ?)'
+        )
+        task_args: list = [like, like, like]
+        note_args: list = [like, like]
+        if project:
+            task_sql += ' AND project = ?'
+            note_sql += ' AND project = ?'
+            task_args.append(project)
+            note_args.append(project)
+        task_sql += ' ORDER BY project, ref'
+        note_sql += ' ORDER BY project, id'
+        return {
+            'tasks': [dict(row) for row in self.conn.execute(task_sql, task_args)],
+            'notes': [dict(row) for row in self.conn.execute(note_sql, note_args)],
+        }
+
+    def stale_tasks(self, days: int = DEFAULT_STALE_DAYS,
+                    project: str | None = None) -> list[dict]:
+        """长时间没动静的在办任务:测真实停滞,不是想象中的计划延期。"""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec='seconds')
+        sql = "SELECT * FROM tasks WHERE status IN ('active', 'waiting') AND updated_at < ?"
+        args: list = [cutoff]
+        if project:
+            sql += ' AND project = ?'
+            args.append(project)
+        sql += ' ORDER BY updated_at'
+        rows = []
+        for row in self.conn.execute(sql, args):
+            item = dict(row)
+            try:
+                idle = datetime.now(timezone.utc) - datetime.fromisoformat(item['updated_at'])
+                item['idle_days'] = round(idle.total_seconds() / 86400, 1)
+            except (TypeError, ValueError):
+                item['idle_days'] = None
+            rows.append(item)
+        return rows

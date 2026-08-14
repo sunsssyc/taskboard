@@ -9,7 +9,8 @@ import html
 import json
 from datetime import datetime
 
-STATUS_LABEL = {'todo': '待办', 'active': '进行中', 'done': '已完成', 'dropped': '已放弃'}
+STATUS_LABEL = {'todo': '待办', 'active': '进行中', 'waiting': '等人工',
+                'done': '已完成', 'dropped': '已放弃'}
 
 STYLE = """
 :root {
@@ -100,6 +101,17 @@ section { display:flex; flex-direction:column; gap:14px; }
 .chip.done { background:var(--done-soft); color:var(--done); border-color:var(--done); }
 .chip.active { background:var(--active-soft); color:var(--active); border-color:var(--active); }
 .chip.todo { background:var(--wait-soft); color:var(--wait); border-color:var(--rule); }
+.chip.waiting { background:var(--active-soft); color:var(--active); border-color:var(--rule); }
+.chip.meta { background:var(--sunken); color:var(--ink-muted); border-color:var(--rule); text-transform:none; }
+.accept { font-size:13px; color:var(--ink-muted); border-left:2px solid var(--accent);
+          padding-left:9px; }
+.accept b { font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; color:var(--accent);
+            text-transform:uppercase; margin-right:6px; }
+.done-fold { margin-top:2px; }
+.done-fold summary { cursor:pointer; font-family:var(--mono); font-size:11.5px; color:var(--ink-faint);
+                     padding:7px 0 7px 45px; }
+.done-fold summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.done-fold[open] summary { color:var(--ink-muted); }
 .chip.dropped { background:var(--wait-soft); color:var(--ink-faint); border-color:var(--rule); }
 .chip.gate { background:var(--alert-soft); color:var(--alert); border-color:var(--alert); }
 .chip.who { background:var(--accent-soft); color:var(--accent); }
@@ -174,7 +186,7 @@ def _overview_card(project: dict) -> str:
     counts = project['counts']
     total = sum(counts.values()) or 1
     done_pct = counts['done'] / total * 100
-    active_pct = counts['active'] / total * 100
+    active_pct = (counts['active'] + counts.get('waiting', 0)) / total * 100
     nxt = _project_next(project)
     next_html = (
         f'<div class="nextline"><span>下一步 #{nxt["ref"]}</span> {esc(nxt["title"])}</div>'
@@ -188,7 +200,7 @@ def _overview_card(project: dict) -> str:
         <div class="key">{esc(project['key'])}</div>
         <h3><a href="#p-{esc(project['key'])}">{esc(project['name'])}</a></h3>
         <div class="bar"><i class="done" style="width:{done_pct:.1f}%"></i><i class="active" style="width:{active_pct:.1f}%"></i></div>
-        <div class="counts"><span>完成 <b>{counts['done']}</b></span><span>进行 <b>{counts['active']}</b></span><span>待办 <b>{counts['todo']}</b></span></div>
+        <div class="counts"><span>完成 <b>{counts['done']}</b></span><span>进行 <b>{counts['active']}</b></span>{f"<span>等人工 <b>{counts['waiting']}</b></span>" if counts.get('waiting') else ''}<span>待办 <b>{counts['todo']}</b></span></div>
         {next_html}{gates}
       </div>"""
 
@@ -201,6 +213,10 @@ def _task_card(task: dict) -> str:
         chips.append('<span class="chip gate">闸门</span>')
     if task['actionable'] and task['status'] == 'todo':
         chips.append('<span class="chip ready">可开工</span>')
+    if task.get('branch'):
+        chips.append(f'<span class="chip meta">{esc(task["branch"])}</span>')
+    if task.get('pr'):
+        chips.append(f'<span class="chip meta">PR {esc(task["pr"])}</span>')
 
     dep_bits = []
     if task['open_blockers']:
@@ -211,12 +227,16 @@ def _task_card(task: dict) -> str:
         dep_bits.append('阻塞 → #' + ', #'.join(str(r) for r in task['blocks']))
     dep_html = f'<div class="dep">{" · ".join(dep_bits)}</div>' if dep_bits else ''
     detail_html = f'<p>{esc(task["detail"])}</p>' if task['detail'] else ''
+    accept_html = (
+        f'<div class="accept"><b>验收</b>{esc(task["accept"])}</div>'
+        if task.get('accept') and task['status'] != 'done' else ''
+    )
 
     return f"""        <div class="step" data-status="{task['status']}">
           <div class="node">{task['ref']}</div>
           <div class="card">
             <div class="card-top"><h3>{esc(task['title'])}</h3>{''.join(chips)}</div>
-            {detail_html}{dep_html}
+            {detail_html}{accept_html}{dep_html}
           </div>
         </div>"""
 
@@ -241,8 +261,18 @@ def _note_card(note: dict, kind: str) -> str:
 
 def _project_section(project: dict) -> str:
     tasks = project['tasks']
-    open_tasks = [t for t in tasks if t['status'] in ('todo', 'active')]
-    spine = '\n'.join(_task_card(task) for task in tasks) or '<p class="empty">还没有任务。</p>'
+    # 已完成的折进一个 details:剩余路径才是每天要看的,完成项只作背景
+    live = [task for task in tasks if task['status'] != 'done']
+    finished = [task for task in tasks if task['status'] == 'done']
+    spine = '\n'.join(_task_card(task) for task in live)
+    if finished:
+        folded = '\n'.join(_task_card(task) for task in finished)
+        spine += f"""
+        <details class="done-fold">
+          <summary>已完成 {len(finished)} 项</summary>
+{folded}
+        </details>"""
+    spine = spine or '<p class="empty">还没有任务。</p>'
     blocks = [f"""    <section id="p-{esc(project['key'])}">
       <div class="sec-head">
         <h2>{esc(project['name'])}</h2>
@@ -284,16 +314,15 @@ def _project_section(project: dict) -> str:
       </div>
     </section>""")
 
-    _ = open_tasks
     return '\n'.join(blocks)
 
 
 def render(snapshot: dict, title: str = '任务看板', live: bool = False) -> str:
     projects = snapshot['projects']
-    totals = {'done': 0, 'active': 0, 'todo': 0, 'dropped': 0}
+    totals: dict[str, int] = {status: 0 for status in STATUS_LABEL}
     for project in projects:
         for status, count in project['counts'].items():
-            totals[status] += count
+            totals[status] = totals.get(status, 0) + count
     gate_total = sum(len(project['gates']) for project in projects)
     actionable = sum(
         1 for project in projects for task in project['tasks'] if task['actionable']
@@ -313,7 +342,7 @@ def render(snapshot: dict, title: str = '任务看板', live: bool = False) -> s
     <div class="meta-line">
       <span>生成于 {_fmt_stamp(snapshot['generated_at'])}</span>
       <span>{len(projects)} 个项目</span>
-      <span>完成 {totals['done']} · 进行 {totals['active']} · 待办 {totals['todo']}</span>
+      <span>完成 {totals['done']} · 进行 {totals['active']}{f" · 等人工 {totals['waiting']}" if totals.get('waiting') else ''} · 待办 {totals['todo']}</span>
       <span>可开工 {actionable}{f" · 闸门 {gate_total}" if gate_total else ''}</span>
     </div>
   </header>
