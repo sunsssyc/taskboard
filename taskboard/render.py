@@ -152,10 +152,17 @@ section[hidden] { display:none; }
 .note { background:var(--surface); border:1px solid var(--rule); border-radius:4px; padding:13px 15px;
         display:flex; flex-direction:column; gap:5px; }
 .note.risk { border-left:3px solid var(--alert); }
+.note[id] { scroll-margin-top:18px; }
+.note-title { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
 .note h4 { margin:0; font-size:13.5px; font-weight:620; }
+.note-title h4 { flex:1 1 180px; }
+.note-id { font-family:var(--mono); font-size:11px; color:var(--ink-faint); white-space:nowrap; }
 .note p { margin:0; font-family:var(--serif); font-size:14px; line-height:1.6; color:var(--ink-muted); }
 .note .metric { font-family:var(--mono); font-size:11.5px; font-variant-numeric:tabular-nums; color:var(--accent); }
 .note .overturns { font-family:var(--mono); font-size:11px; color:var(--ink-faint); }
+.note-ref { color:inherit; text-decoration:none; text-underline-offset:2px; }
+.note-ref:hover { color:var(--accent); text-decoration:underline; }
+.note-ref:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:2px; }
 .note.superseded { grid-column:1/-1; background:var(--sunken); border-style:dashed; padding:9px 14px; }
 .note.superseded summary { cursor:pointer; font-size:13px; color:var(--ink-faint); list-style-position:outside; }
 .note.superseded summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
@@ -311,18 +318,22 @@ def _task_card(task: dict) -> str:
 def _note_card(note: dict, kind: str) -> str:
     if note.get('is_superseded'):
         # 折叠成一行:保留"曾经这么认为"的痕迹,但不与当前结论争夺注意力
-        return f"""      <details class="note superseded">
-        <summary><span class="tag">已被 [{note['superseded_by']}] 推翻</span> {esc(note['title'])}</summary>
+        return f"""      <details class="note superseded" id="note-{note['id']}">
+        <summary><span class="note-id">[{note['id']}]</span> <a class="tag note-ref" href="#note-{note['superseded_by']}">已被 [{note['superseded_by']}] 推翻</a> {esc(note['title'])}</summary>
         {f'<p>{esc(note["body"])}</p>' if note.get('body') else ''}
       </details>"""
     metric = f'<div class="metric">{esc(note["metric"])}</div>' if note.get('metric') else ''
     body = f'<p>{esc(note["body"])}</p>' if note.get('body') else ''
-    overturns = (
-        f'<div class="overturns">推翻了 {", ".join("[" + str(i) + "]" for i in note["supersedes"])}</div>'
-        if note.get('supersedes') else ''
+    overturned_refs = ', '.join(
+        f'<a class="note-ref" href="#note-{note_id}">[{note_id}]</a>'
+        for note_id in note.get('supersedes', [])
     )
-    return f"""      <div class="note {kind}">
-        <h4>{esc(note['title'])}</h4>{metric}{body}{overturns}
+    overturns = (
+        f'<div class="overturns">推翻了 {overturned_refs}</div>'
+        if overturned_refs else ''
+    )
+    return f"""      <div class="note {kind}" id="note-{note['id']}">
+        <div class="note-title"><span class="note-id">[{note['id']}]</span><h4>{esc(note['title'])}</h4></div>{metric}{body}{overturns}
       </div>"""
 
 

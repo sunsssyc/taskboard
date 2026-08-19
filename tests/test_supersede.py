@@ -114,9 +114,11 @@ def test_render_collapses_superseded_and_shows_overturns(store):
     store.add_note('demo', 'finding', '当前结论', supersedes=[old['id']])
     html = render(store.snapshot())
 
-    assert '<details class="note superseded">' in html
-    assert '已被 [2] 推翻' in html   # 折叠行显示推翻者的 id
-    assert '推翻了 [1]' in html      # 新结论显示它推翻了谁
+    assert '<details class="note superseded" id="note-1">' in html
+    assert 'id="note-2"' in html and '<span class="note-id">[2]</span>' in html
+    assert 'href="#note-2">已被 [2] 推翻</a>' in html  # 旧结论可跳到替代它的新结论
+    assert 'id="note-1"' in html and '<span class="note-id">[1]</span>' in html
+    assert 'href="#note-1">[1]</a>' in html            # 新结论可跳回被它推翻的旧结论
     assert html.index('当前结论') < html.index('被推翻的旧结论')  # 有效结论在前
 
 
