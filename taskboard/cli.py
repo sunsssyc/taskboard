@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .render import STATUS_LABEL, render, render_json
+from .render import STATUS_LABEL, html_document, render, render_json
 from .store import BoardError, Store, home_dir
 
 CURRENT_FILE = 'current'
@@ -493,7 +493,7 @@ def cmd_export(store: Store, args) -> int:
     if args.json:
         output = render_json(snapshot)
     else:
-        output = render(snapshot, title=args.title, live=False)
+        output = html_document(render(snapshot, title=args.title, live=False))
     if args.out == '-':
         print(output)
         return 0

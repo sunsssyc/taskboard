@@ -11,6 +11,12 @@ from datetime import datetime
 
 STATUS_LABEL = {'todo': '待办', 'active': '进行中', 'waiting': '等人工',
                 'done': '已完成', 'dropped': '已放弃'}
+HTML_PREFIX = '<!doctype html><meta charset="utf-8">'
+
+
+def html_document(body: str) -> str:
+    """补齐静态文件和 WebView 都能可靠识别的 UTF-8 文档头。"""
+    return HTML_PREFIX + body
 
 STYLE = """
 :root {

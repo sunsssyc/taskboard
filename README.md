@@ -80,6 +80,30 @@ board set --artifact-url https://...   # 记住发布链接,export 时提醒复�
 导出的 HTML 自包含、无外部请求,可直接作为 Artifact 发布或丢进任何静态托管。
 明暗主题跟随系统;已完成的任务折进一个可展开区块,页面只显示剩余路径。
 
+### macOS 菜单栏 App
+
+原生 AppKit/WebKit 菜单栏 App 复用同一个 SQLite 数据库和 `board export` 渲染逻辑,
+不需要常驻 HTTP 服务。窗口打开时监听 `board.db`、WAL 和 SHM 文件,CLI 修改后自动刷新;
+关闭终端不会影响 App。
+
+```bash
+./macos/TaskboardMenuBar/build_app.sh
+mkdir -p ~/Applications
+ditto dist/Taskboard.app ~/Applications/Taskboard.app
+open ~/Applications/Taskboard.app
+```
+
+菜单提供打开/重新加载看板、在 Finder 中显示数据库和“登录时启动”。登录启动使用
+macOS 13+ 的 `SMAppService`;首次启用后若系统要求批准,到“系统设置 → 通用 → 登录项”
+确认即可。
+
+构建脚本会把当前 `board` 的绝对路径写进 App。换了 Python 环境后重新构建,或启动 App
+前设置 `TASKBOARD_BOARD_EXECUTABLE`。数据库默认仍为 `~/.taskboard/board.db`;
+也支持 `TASKBOARD_HOME` 或 App 专用的 `TASKBOARD_DB` 绝对路径。
+
+图标母版位于 `macos/TaskboardMenuBar/Resources/AppIcon.png`。构建时
+`Scripts/make_icns.sh` 会生成 16px 到 1024px 的标准 `AppIcon.icns` 并装入 App。
+
 ## 寻址规则
 
 任务在项目内用 `#ref` 寻址(项目内自增)。当前项目的判定优先级:
@@ -95,6 +119,7 @@ board set --artifact-url https://...   # 记住发布链接,export 时提醒复�
 
 ```bash
 python3 -m pytest tests -q
+swift run --package-path macos/TaskboardMenuBar TaskboardCoreSelfTest
 ```
 
 数据模型:`projects` / `tasks`(项目内 ref 唯一)/ `deps`(建边时拒绝成环)/

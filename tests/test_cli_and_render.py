@@ -80,6 +80,7 @@ def test_cli_export_html_and_json(db, tmp_path, capsys):
     html_path = tmp_path / 'out.html'
     run(db, 'export', '--out', str(html_path), '-p', 'demo')
     html = html_path.read_text(encoding='utf-8')
+    assert html.startswith('<!doctype html><meta charset="utf-8">')
     assert '示例项目' in html and '任务甲' in html
     assert '关键结论' in html and '40/40' in html
 

@@ -60,7 +60,7 @@ def make_handler(db_path: str, title: str, include_archived: bool, dev: bool = F
             path = self.path.split('?')[0].rstrip('/') or '/'
             if path in ('/', '/index.html'):
                 html = render_module.render(self._snapshot(), title=title, live=True)
-                self._send(('<!doctype html><meta charset="utf-8">' + html).encode('utf-8'),
+                self._send(render_module.html_document(html).encode('utf-8'),
                            'text/html; charset=utf-8')
             elif path == '/state.json':
                 snapshot = self._snapshot()
