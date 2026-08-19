@@ -72,7 +72,9 @@ def test_cli_ambiguous_project_errors_cleanly(db, tmp_path, monkeypatch, capsys)
 
 
 def test_cli_export_html_and_json(db, tmp_path, capsys):
-    run(db, 'init', 'demo', '--name', '示例项目')
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    run(db, 'init', 'demo', '--name', '示例项目', '--repo', str(repo))
     run(db, 'add', '任务甲', '--detail', '细节说明', '-p', 'demo')
     run(db, 'finding', '关键结论', '--metric', '40/40', '-p', 'demo')
     capsys.readouterr()
@@ -83,11 +85,21 @@ def test_cli_export_html_and_json(db, tmp_path, capsys):
     assert html.startswith('<!doctype html><meta charset="utf-8">')
     assert '示例项目' in html and '任务甲' in html
     assert '关键结论' in html and '40/40' in html
+    assert db not in html
+    assert str(repo) not in html
 
     json_path = tmp_path / 'out.json'
     run(db, 'export', '--json', '--out', str(json_path))
     data = json.loads(json_path.read_text(encoding='utf-8'))
     assert data['projects'][0]['tasks'][0]['title'] == '任务甲'
+    assert data['db'] is None
+    assert data['projects'][0]['repo'] is None
+
+    local_path = tmp_path / 'local.html'
+    run(db, 'export', '--show-paths', '--out', str(local_path), '-p', 'demo')
+    local_html = local_path.read_text(encoding='utf-8')
+    assert db in local_html
+    assert str(repo) in local_html
 
 
 def test_render_escapes_html(tmp_path):

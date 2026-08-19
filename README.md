@@ -1,9 +1,11 @@
 # claude-taskboard
 
-跨项目任务看板。CLI 更新进度,本地服务实时查看,或导出自包含 HTML 发到任何地方。
+面向个人与 AI 编程助手的跨项目任务看板。CLI 更新进度,本地服务实时查看,或导出
+自包含 HTML 发到任何地方。它不是多人协作、权限管理或云同步系统。
 纯标准库,无第三方依赖;数据存 `~/.taskboard/board.db`(SQLite)。
 
-解决的问题:和 Claude Code 长对话时,计划滚出上下文就看不见了;多个仓库并行推进时,
+解决的问题:和 Claude Code、Codex 等助手长对话时,计划滚出上下文就看不见了;
+多个仓库并行推进时,
 「现在能开工的是哪几件、谁卡着谁」没有单一去处。
 
 ## 安装
@@ -18,12 +20,12 @@ pip install -e /path/to/claude-taskboard
 
 ```bash
 # 登记项目(--repo 登记后,在该目录下执行 board 命令自动定位此项目)
-board init reg-calibration --name "注册模型时代校准" --repo . --summary "一句话说清在干什么"
+board init website-refresh --name "网站改版" --repo . --summary "重做官网并完成上线"
 
 # 加任务,声明依赖
-board add "跑取数脚本" --owner 你
-board add "定常数" --owner 我 --blocked-by 1
-board add "发版" --gate --blocked-by 2        # --gate 标记闸门/关键节点
+board add "确认需求" --owner 你
+board add "实现页面" --owner 我 --blocked-by 1
+board add "发布上线" --gate --blocked-by 2        # --gate 标记闸门/关键节点
 
 # 推进
 board start 1
@@ -47,7 +49,7 @@ board log                 # 变更历史
 任务可以带验收条件与代码坐标:
 
 ```bash
-board add "全量重导" --accept "三张审计表全过" --branch codex/foo --pr 96
+board add "发布新版" --accept "核心流程冒烟通过" --branch codex/site-refresh --pr 96
 ```
 
 `--accept` 在 `board done` 时打印出来对照,`board done` 还会把当时的 HEAD sha 记进
@@ -58,9 +60,9 @@ board add "全量重导" --accept "三张审计表全过" --branch codex/foo --p
 长期项目里真正会被遗忘的不是待办,而是**已经查明的结论**——不写下来就会重复推演。
 
 ```bash
-board finding "负样本人群错位是根因" --metric "≈85% · 43749 行弃用" --body "证据与推论..."
-board risk "大邀请人枚举截断" --body "后端上限约 200,计数会低估"
-board link "analysis/README.md" --body "方案正典,以它为准"
+board finding "移动端首屏慢在大图" --metric "LCP 4.2s → 1.8s" --body "压缩图片后的对照结果..."
+board risk "旧浏览器样式降级" --body "不阻塞上线,后续补兼容验证"
+board link "docs/release-checklist.md" --body "发布验收清单"
 board notes -v            # 一起看
 ```
 
@@ -72,13 +74,19 @@ board notes -v            # 一起看
 
 ```bash
 board serve --open        # localhost:8787,CLI 一改 2 秒内自动刷新
-board export --out board.html
-board export --json --out board.json   # 给其他工具消费
+board export -p website-refresh --out board.html
+board export --json --out board.json   # 给其他工具消费,默认同样隐藏本机路径
+board export --show-paths --out local.html  # 仅本地查看时保留数据库和仓库路径
 board set --artifact-url https://...   # 记住发布链接,export 时提醒复用
 ```
 
 导出的 HTML 自包含、无外部请求,可直接作为 Artifact 发布或丢进任何静态托管。
-明暗主题跟随系统;已完成的任务折进一个可展开区块,页面只显示剩余路径。
+默认隐藏数据库与仓库的本机绝对路径;明暗主题跟随系统,已完成的任务折进一个可展开区块,
+页面只显示剩余路径。
+
+发布前仍应检查内容:任务正文、结论、风险、分支名和链接会原样进入导出文件。
+用 `-p <key>` 只导出准备公开的项目。`board serve` 没有身份认证,默认只监听
+`127.0.0.1`;不要把它直接绑定到公网或不可信局域网。
 
 ### macOS 菜单栏 App
 

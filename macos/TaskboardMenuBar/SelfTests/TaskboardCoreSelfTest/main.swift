@@ -111,6 +111,7 @@ func runSelfTests() throws {
         html.hasPrefix("<!doctype html><meta charset=\"utf-8\">"),
         "导出 HTML 缺少 UTF-8 编码声明"
     )
+    try expect(html.contains(database.path), "本地 App 导出没有保留数据库路径")
     try expect(html.contains("Swift Self Test"), "导出 HTML 缺少项目名称")
     try expect(html.contains("热更新检查"), "导出 HTML 缺少任务名称")
 }

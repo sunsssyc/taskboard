@@ -490,6 +490,12 @@ def cmd_export(store: Store, args) -> int:
     if args.project:
         key = store.get_project(args.project)['key']
         snapshot['projects'] = [p for p in snapshot['projects'] if p['key'] == key]
+    if not args.show_paths:
+        # 导出物常被发布或转发；默认移除只对本机有意义、同时会暴露用户名和目录结构的路径。
+        # serve 仍直接渲染完整 snapshot，macOS App 则显式传 --show-paths 保持本地体验。
+        snapshot['db'] = None
+        for project in snapshot['projects']:
+            project['repo'] = None
     if args.json:
         output = render_json(snapshot)
     else:
@@ -679,6 +685,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument('--title', default='任务看板')
     sp.add_argument('--json', action='store_true', help='导出 JSON 而非 HTML')
     sp.add_argument('--all', action='store_true', help='含已归档项目')
+    sp.add_argument('--show-paths', action='store_true',
+                    help='保留本机数据库和仓库绝对路径(默认脱敏)')
     add_project_flag(sp)
     sp.set_defaults(func=cmd_export)
 

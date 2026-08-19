@@ -399,6 +399,10 @@ def render(snapshot: dict, title: str = '任务看板', live: bool = False) -> s
     sections = '\n'.join(_project_section(project) for project in projects)
     if not projects:
         sections = '<p class="empty">还没有项目。先跑 <code>board init &lt;key&gt; --name "..." --repo .</code></p>'
+    db_path = (
+        f'<span>{esc(snapshot["db"])}</span>'
+        if snapshot.get('db') else ''
+    )
 
     return f"""<title>{esc(title)}</title>
 <style>{STYLE}</style>
@@ -424,7 +428,7 @@ def render(snapshot: dict, title: str = '任务看板', live: bool = False) -> s
 
   <footer>
     <span>board export / board serve</span>
-    <span>{esc(snapshot.get('db', ''))}</span>
+    {db_path}
   </footer>
 </div>
 {FILTER_SCRIPT}{LIVE_SCRIPT if live else ''}
