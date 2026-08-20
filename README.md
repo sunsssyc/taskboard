@@ -146,20 +146,31 @@ board notes -v            # 一起看
 ## 查看
 
 ```bash
-board serve --open        # localhost:8787,CLI 一改 2 秒内自动刷新
+board serve --open        # localhost:8787,CLI 一改 2 秒内自动刷新；本机可轻量操作
 board export -p website-refresh --out board.html
 board export --json --out board.json   # 给其他工具消费,默认同样隐藏本机路径
 board export --show-paths --out local.html  # 仅本地查看时保留数据库和仓库路径
 board set --artifact-url https://...   # 记住发布链接,export 时提醒复用
 ```
 
+`board serve` 的本机页面不再只是静态展示：可按关键词、状态和负责人筛选，打开任务详情
+查看正文、验收、依赖、分支/PR 与事件历史，也可执行开始/等人工/完成/退回，或轻量新增
+任务和 finding。标记完成前会再次展示验收条件；完成事件记录的是该项目登记仓库的 HEAD，
+不是看板服务自身目录的 HEAD。复杂的依赖、闸门、supersede 和长篇编辑仍建议使用 CLI 或
+让 AI Agent 操作，避免把看板变成重型编辑器。
+
+搜索与筛选也会进入静态 HTML，但详情接口和全部写入控件只存在于 `board serve` 页面；
+`board export` 始终只读。
+
 导出的 HTML 自包含、无外部请求,可直接作为 Artifact 发布或丢进任何静态托管。
 默认隐藏数据库与仓库的本机绝对路径;明暗主题跟随系统,已完成的任务折进一个可展开区块,
 页面只显示剩余路径。
 
 发布前仍应检查内容:任务正文、结论、风险、分支名和链接会原样进入导出文件。
-用 `-p <key>` 只导出准备公开的项目。`board serve` 没有身份认证,默认只监听
-`127.0.0.1`;不要把它直接绑定到公网或不可信局域网。
+用 `-p <key>` 只导出准备公开的项目。`board serve` 没有用户身份认证；写入只在
+`127.0.0.1`、`localhost` 或 `::1` 监听时启用，并校验 Host、Origin、进程级 CSRF、
+JSON 类型和请求体大小。绑定其他地址时页面自动只读，但仍不要把它直接暴露到公网或
+不可信局域网。
 
 ### macOS 菜单栏 App
 

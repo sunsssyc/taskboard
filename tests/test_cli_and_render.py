@@ -207,6 +207,33 @@ def test_task_and_note_fields_render_markdown(tmp_path):
     assert '<code>docs/check.md</code> 查看 <strong>支持范围</strong>' in html
 
 
+def test_live_render_has_interactions_but_static_export_stays_read_only(tmp_path):
+    store = Store(tmp_path / 'interactive.db')
+    store.create_project('demo', '交互看板')
+    store.add_task('demo', '可操作任务', detail='**说明**', owner='我')
+    snapshot = store.snapshot()
+    store.close()
+
+    live_html = render(
+        snapshot, live=True, csrf_token='test-csrf', write_enabled=True,
+    )
+    assert 'name="query"' in live_html and 'name="status"' in live_html
+    assert 'class="detail-button"' in live_html
+    assert 'data-create="task"' in live_html and 'data-create="finding"' in live_html
+    assert 'data-status="done"' in live_html
+    assert 'data-csrf="test-csrf"' in live_html
+    assert '/api/tasks/' in live_html
+    assert "current.task.accept ? '\\n\\n验收条件" in live_html
+
+    static_html = render(snapshot)
+    assert 'name="query"' in static_html  # 搜索筛选仍是纯前端只读交互
+    assert 'class="detail-button"' not in static_html
+    assert 'data-create="task"' not in static_html
+    assert '<button type="button" class="action primary" data-status="done">' not in static_html
+    assert 'data-csrf=' not in static_html
+    assert '/api/tasks/' not in static_html
+
+
 def test_task_commands_reject_literal_paragraph_breaks(db, capsys):
     run(db, 'init', 'demo', '--name', '换行防错')
     capsys.readouterr()

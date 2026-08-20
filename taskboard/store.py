@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -18,6 +19,21 @@ OPEN_STATUSES = ('todo', 'active', 'waiting')
 ACTIONABLE_STATUSES = ('todo', 'active')
 NOTE_KINDS = ('finding', 'risk', 'link')
 DEFAULT_STALE_DAYS = 3
+MARKDOWN_CODE_RE = re.compile(r'```.*?```|`[^`\n]*`', re.DOTALL)
+LITERAL_PARAGRAPH_BREAK_RE = re.compile(r'(?<!\\)\\n(?<!\\)\\n')
+
+
+def validate_markdown_newlines(*values: str | None) -> None:
+    """拒绝正文里的字面量 ``\\n\\n``，代码片段中的展示用法除外。"""
+    for value in values:
+        if not value:
+            continue
+        prose = MARKDOWN_CODE_RE.sub('', value)
+        if LITERAL_PARAGRAPH_BREAK_RE.search(prose):
+            raise BoardError(
+                r"检测到字面量 \n\n；请传真实换行。bash/zsh 示例: "
+                r"--detail $'第一段\n\n第二段'。若要展示转义符,请放进行内代码 `\n\n`。"
+            )
 
 
 def home_dir() -> Path:
