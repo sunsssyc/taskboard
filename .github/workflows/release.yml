@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependency
+        run: python -m pip install pytest
+
+      - name: Verify tests
+        run: python -m pytest -q
+
+      - name: Verify tag matches project version
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python scripts/prepare_homebrew_release.py \
+            --repository "$GITHUB_REPOSITORY" \
+            --version "$version" \
+            --revision "$GITHUB_SHA" \
+            --output-dir dist/homebrew
+
+      - name: Require tap publishing token
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          if [[ -z "$HOMEBREW_TAP_TOKEN" ]]; then
+            echo "::error::Set HOMEBREW_TAP_TOKEN with contents:write access to homebrew-tap"
+            exit 1
+          fi
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/homebrew/claude-taskboard-${version}.tar.gz" \
+            --generate-notes \
+            --title "Taskboard ${version}"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+
+      - name: Update Homebrew tap
+        run: |
+          mkdir -p homebrew-tap/Formula
+          cp dist/homebrew/taskboard.rb homebrew-tap/Formula/taskboard.rb
+          git -C homebrew-tap config user.name github-actions[bot]
+          git -C homebrew-tap config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git -C homebrew-tap add Formula/taskboard.rb
+          if git -C homebrew-tap diff --cached --quiet; then
+            echo "Formula is already current"
+            exit 0
+          fi
+          git -C homebrew-tap commit -m "taskboard ${GITHUB_REF_NAME#v}"
+          git -C homebrew-tap push

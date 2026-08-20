@@ -23,6 +23,28 @@ flowchart TD
 
 ## 安装
 
+### Homebrew（公开仓库发布后）
+
+与 CCSwitch CLI 相同，Taskboard 使用第三方 tap 发布：
+
+```bash
+brew tap <github-owner>/tap
+brew install taskboard
+```
+
+升级与卸载：
+
+```bash
+brew upgrade taskboard
+brew uninstall taskboard
+```
+
+当前仓库尚未关联公开 GitHub remote，因此 `<github-owner>` 仍是发布时参数；本地 Formula、
+MIT License、确定性源码归档和 tap 自动更新 workflow 已就绪。Formula 安装 `board` CLI 和
+Agent Skill，不会创建或覆盖 `~/.taskboard/board.db`。
+
+### 从源码安装
+
 ```bash
 pip install -e /path/to/claude-taskboard
 ```
@@ -227,3 +249,29 @@ swift run --package-path macos/TaskboardMenuBar TaskboardCoreSelfTest
 并发:WAL + `busy_timeout`,`ref` 分配在 `BEGIN IMMEDIATE` 写锁下完成,配合
 `UNIQUE(project, ref)` 双保险,多个 CLI 进程同时写不会重号。
 升级:新版本打开老库会自动补列,不需要单独的迁移命令。
+
+### 发布 Homebrew Formula
+
+首次发布前准备两个公开仓库：`<owner>/claude-taskboard` 与 `<owner>/homebrew-tap`，后者包含
+`Formula/` 目录。在源码仓库设置 `HOMEBREW_TAP_TOKEN`，令其只对 `homebrew-tap` 有
+`contents:write` 权限。
+
+版本以 `pyproject.toml` 为准。推送同版本 tag 后，
+[release workflow](.github/workflows/release.yml) 会：
+
+1. 运行 Python 测试。
+2. 生成确定性的 `claude-taskboard-<version>.tar.gz` 与真实 SHA-256。
+3. 创建 GitHub Release。
+4. 更新 `<owner>/homebrew-tap` 的 `Formula/taskboard.rb`。
+
+本地可先生成发布物：
+
+```bash
+python3 scripts/prepare_homebrew_release.py \
+  --repository <owner>/claude-taskboard \
+  --output-dir dist/homebrew
+```
+
+Formula 的发布模板位于 `packaging/homebrew/taskboard.rb.in`，依赖 Homebrew
+`python@3.13`，不会使用用户全局 Python 环境。菜单栏 App 尚未进入 cask：正式 cask
+发布需要 Developer ID 签名与 notarization，不能使用当前 ad-hoc 签名产物。
