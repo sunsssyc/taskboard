@@ -133,3 +133,20 @@ def test_render_marks_gate_and_blocking(tmp_path):
     store.close()
     assert '闸门</span>' in html
     assert '阻塞于' in html and '阻塞 →' in html
+
+
+def test_render_long_notes_use_full_width_reading_layout(tmp_path):
+    store = Store(tmp_path / 'long-notes.db')
+    store.create_project('demo', '长结论排版')
+    store.add_note('demo', 'finding', '短结论', body='一句话说明')
+    store.add_note('demo', 'finding', '长篇技术结论', body='技术正文' * 100)
+    html = render(store.snapshot())
+    store.close()
+
+    assert 'class="note finding" id="note-1"' in html
+    assert 'class="note finding long" id="note-2"' in html
+    assert 'grid-column:1/-1' in html
+    assert 'grid-template-columns:minmax(240px,.75fr) minmax(0,1.8fr)' in html
+    assert 'grid-template-columns:32px minmax(0,1fr)' in html
+    assert 'overflow-wrap:anywhere' in html
+    assert '@media (max-width:760px)' in html

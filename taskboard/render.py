@@ -1,7 +1,7 @@
 """把状态快照渲染成自包含 HTML(无外部资源,可直接发布)。
 
-视觉语言:冷石板中性色 + 汽油蓝主色,状态用语义色单独承载;标题无衬线、
-数据等宽、结论用衬线以区别"叙述"与"状态"。明暗主题按 token 三态定义。
+视觉语言:冷石板中性色 + 汽油蓝主色,状态用语义色单独承载;标题与技术正文无衬线、
+数据等宽,长结论切换成全宽阅读布局。明暗主题按 token 三态定义。
 """
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from datetime import datetime
 STATUS_LABEL = {'todo': '待办', 'active': '进行中', 'waiting': '等人工',
                 'done': '已完成', 'dropped': '已放弃'}
 HTML_PREFIX = '<!doctype html><meta charset="utf-8">'
+LONG_NOTE_BODY_CHARS = 320
 
 
 def html_document(body: str) -> str:
@@ -28,7 +29,6 @@ STYLE = """
   --shadow:0 1px 2px rgba(18,26,27,.06), 0 6px 16px -10px rgba(18,26,27,.18);
   --sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
-  --serif:Georgia,"Songti SC","Noto Serif CJK SC",serif;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -103,11 +103,13 @@ section { display:flex; flex-direction:column; gap:14px; scroll-margin-top:18px;
 section[hidden] { display:none; }
 .sec-head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; border-bottom:1px solid var(--rule); padding-bottom:9px; }
 .sec-head h2 { margin:0; font-size:17px; font-weight:620; letter-spacing:-.01em; }
-.sec-head .key { font-family:var(--mono); font-size:11.5px; color:var(--ink-faint); }
+.sec-head .key { max-width:100%; min-width:0; overflow-wrap:anywhere; font-family:var(--mono);
+                 font-size:11.5px; color:var(--ink-faint); }
 .sec-head p { margin:0; font-size:13px; color:var(--ink-muted); flex:1 1 240px; }
 
-.spine { display:flex; flex-direction:column; }
-.step { display:grid; grid-template-columns:32px 1fr; gap:13px; position:relative; padding-bottom:11px; }
+.spine { display:flex; flex-direction:column; min-width:0; }
+.step { display:grid; grid-template-columns:32px minmax(0,1fr); gap:13px; position:relative;
+        min-width:0; padding-bottom:11px; }
 .step::before { content:""; position:absolute; left:15px; top:25px; bottom:0; width:1px; background:var(--rule); }
 .step:last-child::before { display:none; }
 .node { width:31px; height:31px; border-radius:50%; display:grid; place-items:center; z-index:1;
@@ -117,14 +119,16 @@ section[hidden] { display:none; }
 .step[data-status="active"] .node { background:var(--active-soft); border-color:var(--active); color:var(--active); font-weight:700; }
 .step[data-status="dropped"] .node { color:var(--ink-faint); opacity:.6; }
 .card { background:var(--surface); border:1px solid var(--rule); border-radius:4px; padding:12px 15px;
-        display:flex; flex-direction:column; gap:6px; box-shadow:var(--shadow); }
+        display:flex; flex-direction:column; gap:6px; min-width:0; box-shadow:var(--shadow); }
 .step[data-status="active"] .card { border-left:3px solid var(--active); }
 .step[data-status="done"] .card { background:var(--sunken); box-shadow:none; }
 .step[data-status="dropped"] .card { opacity:.55; }
-.card-top { display:flex; flex-wrap:wrap; gap:7px 11px; align-items:center; }
-.card-top h3 { margin:0; font-size:14.5px; font-weight:600; letter-spacing:-.004em; flex:1 1 auto; min-width:180px; }
+.card-top { display:flex; flex-wrap:wrap; gap:7px 11px; align-items:center; min-width:0; }
+.card-top h3 { margin:0; min-width:0; overflow-wrap:anywhere; font-size:14.5px; font-weight:600;
+               letter-spacing:-.004em; flex:1 1 180px; }
 .step[data-status="dropped"] .card-top h3 { text-decoration:line-through; }
-.card p { margin:0; font-size:13.5px; color:var(--ink-muted); max-width:76ch; }
+.card p { margin:0; min-width:0; overflow-wrap:anywhere; font-size:13.5px; color:var(--ink-muted);
+          max-width:76ch; }
 .chip { font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;
         padding:3px 8px; border-radius:2px; white-space:nowrap; border:1px solid transparent; }
 .chip.done { background:var(--done-soft); color:var(--done); border-color:var(--done); }
@@ -148,18 +152,25 @@ section[hidden] { display:none; }
 .dep { font-family:var(--mono); font-size:11.5px; color:var(--ink-faint); }
 .dep b { color:var(--alert); font-weight:600; }
 
-.notes { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
+.notes { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; }
 .note { background:var(--surface); border:1px solid var(--rule); border-radius:4px; padding:13px 15px;
         display:flex; flex-direction:column; gap:5px; }
 .note.risk { border-left:3px solid var(--alert); }
 .note[id] { scroll-margin-top:18px; }
+.note-aside { display:flex; flex-direction:column; gap:5px; min-width:0; }
 .note-title { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
 .note h4 { margin:0; font-size:13.5px; font-weight:620; }
 .note-title h4 { flex:1 1 180px; }
 .note-id { font-family:var(--mono); font-size:11px; color:var(--ink-faint); white-space:nowrap; }
-.note p { margin:0; font-family:var(--serif); font-size:14px; line-height:1.6; color:var(--ink-muted); }
+.note p { margin:0; min-width:0; overflow-wrap:anywhere; font-family:var(--sans); font-size:14px;
+          line-height:1.7; color:var(--ink); }
 .note .metric { font-family:var(--mono); font-size:11.5px; font-variant-numeric:tabular-nums; color:var(--accent); }
 .note .overturns { font-family:var(--mono); font-size:11px; color:var(--ink-faint); }
+.note.long { grid-column:1/-1; display:grid; grid-template-columns:minmax(240px,.75fr) minmax(0,1.8fr);
+             gap:8px 26px; align-items:start; }
+.note.long .note-aside { grid-column:1; grid-row:1; }
+.note.long > p { grid-column:2; grid-row:1; max-width:82ch; border-left:1px solid var(--rule-soft);
+                 padding-left:22px; }
 .note-ref { color:inherit; text-decoration:none; text-underline-offset:2px; }
 .note-ref:hover { color:var(--accent); text-decoration:underline; }
 .note-ref:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:2px; }
@@ -170,6 +181,10 @@ section[hidden] { display:none; }
                         color:var(--alert); border:1px solid var(--rule); border-radius:2px;
                         padding:1px 6px; margin-right:7px; white-space:nowrap; }
 .note.superseded p { margin-top:8px; font-size:13.5px; }
+@media (max-width:760px) {
+  .note.long { display:flex; }
+  .note.long > p { max-width:none; border-left:0; padding-left:0; }
+}
 .linklist { display:flex; flex-direction:column; gap:5px; font-size:13.5px; color:var(--ink-muted); }
 .linklist code { font-family:var(--mono); font-size:12.5px; background:var(--sunken); padding:1px 5px;
                  border-radius:2px; color:var(--ink); overflow-wrap:anywhere; }
@@ -323,7 +338,9 @@ def _note_card(note: dict, kind: str) -> str:
         {f'<p>{esc(note["body"])}</p>' if note.get('body') else ''}
       </details>"""
     metric = f'<div class="metric">{esc(note["metric"])}</div>' if note.get('metric') else ''
-    body = f'<p>{esc(note["body"])}</p>' if note.get('body') else ''
+    body_text = note.get('body') or ''
+    body = f'<p>{esc(body_text)}</p>' if body_text else ''
+    layout_class = ' long' if len(body_text) >= LONG_NOTE_BODY_CHARS else ''
     overturned_refs = ', '.join(
         f'<a class="note-ref" href="#note-{note_id}">[{note_id}]</a>'
         for note_id in note.get('supersedes', [])
@@ -332,8 +349,8 @@ def _note_card(note: dict, kind: str) -> str:
         f'<div class="overturns">推翻了 {overturned_refs}</div>'
         if overturned_refs else ''
     )
-    return f"""      <div class="note {kind}" id="note-{note['id']}">
-        <div class="note-title"><span class="note-id">[{note['id']}]</span><h4>{esc(note['title'])}</h4></div>{metric}{body}{overturns}
+    return f"""      <div class="note {kind}{layout_class}" id="note-{note['id']}">
+        <div class="note-aside"><div class="note-title"><span class="note-id">[{note['id']}]</span><h4>{esc(note['title'])}</h4></div>{metric}{overturns}</div>{body}
       </div>"""
 
 
