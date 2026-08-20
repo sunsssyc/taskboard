@@ -8,6 +8,19 @@
 多个仓库并行推进时,
 「现在能开工的是哪几件、谁卡着谁」没有单一去处。
 
+## 30 秒看懂
+
+```mermaid
+flowchart TD
+    A["长对话 + 多仓库<br/>计划与结论容易丢"] --> B["新会话先读<br/>board next + board notes"]
+    B --> C["只拿到当前可执行路径<br/>可开工任务 + 已定结论"]
+    C --> D["推进<br/>start / wait / done"]
+    D --> E["沉淀<br/>finding / risk / link"]
+    E --> F[("~/.taskboard/board.db<br/>SQLite 单一事实源")]
+    F --> B
+    F --> G["CLI · HTML / JSON · macOS App"]
+```
+
 ## 安装
 
 ```bash
@@ -15,6 +28,52 @@ pip install -e /path/to/claude-taskboard
 ```
 
 得到全局命令 `board`。数据库位置可用 `TASKBOARD_HOME` 覆盖。
+
+## 让 AI Agent 自动使用
+
+仓库内置标准 Agent Skill: `.agents/skills/taskboard`。先安装上面的 `board` CLI，
+再在 claude-taskboard 仓库根目录执行对应命令。
+
+### Codex / Cursor
+
+Codex 和 Cursor 打开本仓库时会自动发现 `.agents/skills`。要让 skill 在所有项目可用：
+
+```bash
+TASKBOARD_ROOT="$(pwd)"
+mkdir -p "$HOME/.agents/skills"
+ln -sfn "$TASKBOARD_ROOT/.agents/skills/taskboard" "$HOME/.agents/skills/taskboard"
+```
+
+### Claude Code
+
+```bash
+TASKBOARD_ROOT="$(pwd)"
+mkdir -p "$HOME/.claude/skills"
+ln -sfn "$TASKBOARD_ROOT/.agents/skills/taskboard" "$HOME/.claude/skills/taskboard"
+```
+
+### Gemini CLI
+
+Gemini CLI 使用 `GEMINI.md` 上下文文件，而不是 Agent Skills 目录。以下命令会幂等地
+导入同一份 `SKILL.md`：
+
+```bash
+TASKBOARD_ROOT="$(pwd)"
+mkdir -p "$HOME/.gemini"
+ln -sfn "$TASKBOARD_ROOT/.agents/skills/taskboard/SKILL.md" "$HOME/.gemini/taskboard.md"
+touch "$HOME/.gemini/GEMINI.md"
+grep -Fqx '@./taskboard.md' "$HOME/.gemini/GEMINI.md" || \
+  printf '\n@./taskboard.md\n' >> "$HOME/.gemini/GEMINI.md"
+```
+
+运行 Gemini CLI 后执行 `/memory refresh`。如果 Agent 没有立即发现新建的顶层 skill
+目录，重启一次。无法使用符号链接的环境可以复制整个 `taskboard` skill 目录，更新时
+重新复制。
+
+安装位置依据 [Codex Skills](https://developers.openai.com/codex/skills)、
+[Cursor Agent Skills](https://cursor.com/docs/skills)、
+[Claude Code Skills](https://code.claude.com/docs/en/slash-commands) 和
+[Gemini CLI GEMINI.md](https://google-gemini.github.io/gemini-cli/docs/cli/gemini-md.html)。
 
 ## 上手
 
