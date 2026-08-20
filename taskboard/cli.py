@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +25,8 @@ CYAN = '\033[36m'
 COLOR = {'done': '\033[32m', 'active': '\033[33m', 'todo': '\033[36m',
          'waiting': '\033[35m', 'dropped': '\033[2m'}
 MARK = {'done': '✓', 'active': '▸', 'todo': '·', 'waiting': '⏸', 'dropped': '✗'}
+MARKDOWN_CODE_RE = re.compile(r'```.*?```|`[^`\n]*`', re.DOTALL)
+LITERAL_PARAGRAPH_BREAK_RE = re.compile(r'(?<!\\)\\n(?<!\\)\\n')
 
 
 def _tty() -> bool:
@@ -63,6 +66,19 @@ def _refs(value: str | None) -> list[int]:
     if not value:
         return []
     return [int(part) for part in str(value).replace(',', ' ').split()]
+
+
+def _validate_markdown_newlines(*values: str | None) -> None:
+    """防止 shell 双引号把预期的段落换行写成字面量 ``\n\n``。"""
+    for value in values:
+        if not value:
+            continue
+        prose = MARKDOWN_CODE_RE.sub('', value)
+        if LITERAL_PARAGRAPH_BREAK_RE.search(prose):
+            raise BoardError(
+                r"检测到字面量 \n\n；请传真实换行。bash/zsh 示例: "
+                r"--detail $'第一段\n\n第二段'。若要展示转义符,请放进行内代码 `\n\n`。"
+            )
 
 
 # ── 输出 ────────────────────────────────────────────────────────────────
@@ -139,6 +155,7 @@ def git_head_sha(cwd: Path | None = None) -> str | None:
 
 
 def cmd_add(store: Store, args) -> int:
+    _validate_markdown_newlines(args.detail, args.accept)
     project = resolve_project(store, args.project)
     task = store.add_task(
         project, args.title, detail=args.detail, owner=args.owner,
@@ -375,6 +392,7 @@ def _status_cmd(status: str):
 
 
 def cmd_edit(store: Store, args) -> int:
+    _validate_markdown_newlines(args.detail, args.accept)
     project = resolve_project(store, args.project)
     gate = True if args.gate else (False if args.no_gate else None)
     task = store.update_task(
@@ -410,6 +428,7 @@ NOTE_LABEL = {'finding': '结论', 'risk': '尾巴', 'link': '文件'}
 
 def _note_cmd(kind: str):
     def handler(store: Store, args) -> int:
+        _validate_markdown_newlines(args.body)
         project = resolve_project(store, args.project)
         supersedes = _refs(getattr(args, 'supersedes', None))
         note = store.add_note(project, kind, args.title, body=args.body,

@@ -205,3 +205,33 @@ def test_task_and_note_fields_render_markdown(tmp_path):
     assert '<blockquote><p>已验证</p></blockquote>' in html
     assert '<a href="docs/check.md">文档</a>' in html
     assert '<code>docs/check.md</code> 查看 <strong>支持范围</strong>' in html
+
+
+def test_task_commands_reject_literal_paragraph_breaks(db, capsys):
+    run(db, 'init', 'demo', '--name', '换行防错')
+    capsys.readouterr()
+
+    assert run(db, 'add', '错误换行', '--detail', r'第一段\n\n第二段', '-p', 'demo') == 1
+    assert '字面量 \\n\\n' in capsys.readouterr().err
+
+    assert run(db, 'add', '真实换行', '--detail', '第一段\n\n第二段', '-p', 'demo') == 0
+    assert run(db, 'edit', '1', '--detail', r'改后第一段\n\n改后第二段', '-p', 'demo') == 1
+    assert '字面量 \\n\\n' in capsys.readouterr().err
+
+    # 明确放在代码跨度里的转义符是展示内容,不应误报。
+    assert run(db, 'edit', '1', '--detail', r'展示 `\n\n` 转义符', '-p', 'demo') == 0
+
+
+@pytest.mark.parametrize('command', ['finding', 'risk', 'link'])
+def test_note_commands_reject_literal_paragraph_breaks(db, capsys, command):
+    run(db, 'init', 'demo', '--name', '记录换行防错')
+    capsys.readouterr()
+
+    assert run(db, command, '错误记录', '--body', r'第一段\n\n第二段', '-p', 'demo') == 1
+    assert '字面量 \\n\\n' in capsys.readouterr().err
+
+    store = Store(db)
+    try:
+        assert store.notes('demo') == []
+    finally:
+        store.close()
