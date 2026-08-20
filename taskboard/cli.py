@@ -416,8 +416,10 @@ def _note_cmd(kind: str):
         project = resolve_project(store, args.project)
         supersedes = _refs(getattr(args, 'supersedes', None))
         note = store.add_note(project, kind, args.title, body=args.body,
-                              metric=args.metric, supersedes=supersedes)
-        print(f'{NOTE_LABEL[kind]} [{note["id"]}] {note["title"]}')
+                              metric=args.metric, supersedes=supersedes,
+                              category=args.category)
+        category = f' · {note["category"]}' if note['category'] else ''
+        print(f'{NOTE_LABEL[kind]} [{note["id"]}] {note["title"]}{category}')
         for old_id in supersedes:
             print(paint(f'  ↳ 推翻了 [{old_id}]', DIM))
         return 0
@@ -434,16 +436,22 @@ def cmd_notes(store: Store, args) -> int:
         if not notes:
             continue
         print(paint(label, BOLD))
+        groups: dict[str, list[dict]] = {}
         for note in notes:
-            metric = paint(f'  {note["metric"]}', DIM) if note['metric'] else ''
-            title = note['title']
-            if note['is_superseded']:
-                title = paint(f'{title}(已被 [{note["superseded_by"]}] 推翻)', DIM)
-            print(f'  [{note["id"]}] {title}{metric}')
-            if note['supersedes']:
-                print(paint('      ↳ 推翻了 ' + ', '.join(f'[{i}]' for i in note['supersedes']), DIM))
-            if note['body'] and args.verbose:
-                print(paint(f'      {note["body"]}', DIM))
+            groups.setdefault(note.get('category') or '未分类', []).append(note)
+        for category in sorted(groups, key=lambda value: value == '未分类'):
+            category_notes = groups[category]
+            print(paint(f'  {category} · {len(category_notes)}', CYAN))
+            for note in category_notes:
+                metric = paint(f'  {note["metric"]}', DIM) if note['metric'] else ''
+                title = note['title']
+                if note['is_superseded']:
+                    title = paint(f'{title}(已被 [{note["superseded_by"]}] 推翻)', DIM)
+                print(f'    [{note["id"]}] {title}{metric}')
+                if note['supersedes']:
+                    print(paint('      ↳ 推翻了 ' + ', '.join(f'[{i}]' for i in note['supersedes']), DIM))
+                if note['body'] and args.verbose:
+                    print(paint(f'      {note["body"]}', DIM))
     if not args.superseded:
         hidden = sum(
             1 for kind in labels
@@ -451,6 +459,14 @@ def cmd_notes(store: Store, args) -> int:
         )
         if hidden:
             print(paint(f'\n另有 {hidden} 条已被推翻 · board notes --superseded 查看', DIM))
+    return 0
+
+
+def cmd_note_category(store: Store, args) -> int:
+    for note_id in args.ids:
+        note = store.set_note_category(note_id, args.category)
+        category = note['category'] or '未分类'
+        print(f'[{note["id"]}] {note["title"]} → {category}')
     return 0
 
 
@@ -654,6 +670,7 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument('title')
         sp.add_argument('--body')
         sp.add_argument('--metric', help='一行关键数字')
+        sp.add_argument('--category', help='稳定主题分类；同一项目建议只用 2~6 类')
         sp.add_argument('--supersedes', help='推翻哪几条旧记录(id,逗号分隔);旧记录保留但标记失效')
         add_project_flag(sp)
         sp.set_defaults(func=_note_cmd(kind))
@@ -676,6 +693,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser('note-rm', help='删记录')
     sp.add_argument('ids', type=int, nargs='+')
     sp.set_defaults(func=cmd_note_rm)
+
+    sp = sub.add_parser('note-category', help='给已有记录设置分类；传空字符串移回未分类')
+    sp.add_argument('ids', type=int, nargs='+')
+    sp.add_argument('--category', required=True)
+    sp.set_defaults(func=cmd_note_category)
 
     sp = sub.add_parser('log', help='变更历史')
     sp.add_argument('--limit', type=int, default=20)

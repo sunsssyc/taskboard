@@ -198,6 +198,25 @@ section[hidden] { display:none; }
 }
 
 .notes { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; }
+.category-index { display:flex; flex-wrap:wrap; gap:7px; padding:9px 10px; background:var(--sunken);
+                  border:1px solid var(--rule-soft); border-radius:4px; }
+.category-index a { display:inline-flex; gap:6px; align-items:center; color:var(--ink-muted);
+                    text-decoration:none; font-size:12px; border:1px solid var(--rule);
+                    border-radius:2px; padding:3px 8px; background:var(--surface); }
+.category-index a:hover { color:var(--accent); border-color:var(--accent); }
+.category-index a[hidden] { display:none; }
+.category-index a:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.category-index b { color:var(--ink-faint); font-family:var(--mono); font-weight:500; }
+.note-groups { display:flex; flex-direction:column; gap:20px; }
+.note-group { display:flex; flex-direction:column; gap:9px; scroll-margin-top:82px; }
+.note-group[hidden] { display:none; }
+.note-group-head { display:flex; align-items:baseline; gap:9px; border-bottom:1px solid var(--rule-soft);
+                   padding:5px 2px 7px; cursor:pointer; }
+.note-group-head:hover h3 { color:var(--accent); }
+.note-group-head:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.note-group-head h3 { margin:0; font-size:14px; font-weight:650; }
+.note-group-head span { font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); }
+.note-group > .notes, .note-group > .linklist { margin-top:9px; }
 .note { background:var(--surface); border:1px solid var(--rule); border-radius:4px; padding:13px 15px;
         display:flex; flex-direction:column; gap:5px; }
 .note.risk { border-left:3px solid var(--alert); }
@@ -323,6 +342,14 @@ FILTER_SCRIPT = """
       if (doneFold && (needle || statusValue === 'done')) {
         doneFold.open = Boolean(doneFold.querySelector('.step:not([hidden])'));
       }
+      section.querySelectorAll('.note-group').forEach(function (group) {
+        group.hidden = !group.querySelector('[data-filter-item]:not([hidden])');
+        if (needle && !group.hidden) group.open = true;
+      });
+      section.querySelectorAll('.category-index a').forEach(function (link) {
+        var group = document.getElementById(link.getAttribute('href').slice(1));
+        link.hidden = Boolean(group && group.hidden);
+      });
     });
     if (selectedProject) {
       overview.setAttribute('data-filtered', '');
@@ -351,6 +378,12 @@ FILTER_SCRIPT = """
   [query, status, owner].forEach(function (control) {
     if (control) control.addEventListener(control === query ? 'input' : 'change', apply);
   });
+  document.querySelectorAll('.category-index a').forEach(function (link) {
+    link.addEventListener('click', function () {
+      var group = document.getElementById(link.getAttribute('href').slice(1));
+      if (group) group.open = true;
+    });
+  });
 })();
 </script>
 """
@@ -367,8 +400,9 @@ INTERACTIVE_SCRIPT = """
   var detailMeta = detailDialog.querySelector('.meta');
   var detailActions = detailDialog.querySelector('.dialog-actions');
   var createDialog = document.getElementById('create-dialog');
-  var createForm = createDialog.querySelector('form');
-  var createError = createDialog.querySelector('.form-error');
+  var createForm = createDialog ? createDialog.querySelector('form') : null;
+  var createError = createDialog ? createDialog.querySelector('.form-error') : null;
+  var categoryMap = createForm ? JSON.parse(createForm.dataset.categories || '{}') : {};
   var current = null;
 
   function element(tag, className, text) {
@@ -398,6 +432,18 @@ INTERACTIVE_SCRIPT = """
     else copy.textContent = content;
     block.appendChild(copy);
     detailBody.appendChild(block);
+  }
+
+  function updateCategoryOptions() {
+    if (!createForm) return;
+    var list = createForm.querySelector('#finding-categories');
+    var project = createForm.elements.project.value;
+    list.replaceChildren();
+    (categoryMap[project] || []).forEach(function (category) {
+      var option = document.createElement('option');
+      option.value = category;
+      list.appendChild(option);
+    });
   }
 
   async function openDetail(button) {
@@ -451,7 +497,7 @@ INTERACTIVE_SCRIPT = """
     var closeButton = event.target.closest('[data-close]');
     if (closeButton) closeButton.closest('dialog').close();
     var createButton = event.target.closest('[data-create]');
-    if (createButton) {
+    if (createButton && createForm) {
       createForm.reset();
       createError.textContent = '';
       createForm.elements.kind.value = createButton.dataset.create;
@@ -462,6 +508,7 @@ INTERACTIVE_SCRIPT = """
         node.hidden = createButton.dataset.create !== 'finding';
       });
       createDialog.querySelector('h2').textContent = createButton.dataset.create === 'task' ? '新建任务' : '记录结论';
+      updateCategoryOptions();
       createDialog.showModal();
     }
   });
@@ -485,7 +532,7 @@ INTERACTIVE_SCRIPT = """
     }
   });
 
-  createForm.addEventListener('submit', async function (event) {
+  if (createForm) createForm.addEventListener('submit', async function (event) {
     event.preventDefault();
     createError.textContent = '';
     var data = new FormData(createForm);
@@ -501,6 +548,7 @@ INTERACTIVE_SCRIPT = """
       path = '/api/notes';
       payload.body = data.get('body');
       payload.metric = data.get('metric');
+      payload.category = data.get('category');
     }
     try {
       await api(path, {method: 'POST', body: JSON.stringify(payload)});
@@ -509,6 +557,7 @@ INTERACTIVE_SCRIPT = """
       createError.textContent = error.message;
     }
   });
+  if (createForm) createForm.elements.project.addEventListener('change', updateCategoryOptions);
 })();
 </script>
 """
@@ -775,7 +824,7 @@ def _task_card(task: dict, project: str, live: bool = False) -> str:
 
 def _note_card(note: dict, kind: str) -> str:
     search_text = ' '.join(str(note.get(field) or '') for field in (
-        'id', 'title', 'body', 'metric'
+        'id', 'category', 'title', 'body', 'metric'
     )).casefold()
     if note.get('is_superseded'):
         # 折叠成一行:保留"曾经这么认为"的痕迹,但不与当前结论争夺注意力
@@ -798,6 +847,67 @@ def _note_card(note: dict, kind: str) -> str:
     return f"""      <div class="note {kind}{layout_class}" id="note-{note['id']}" data-filter-item data-search="{esc(search_text)}">
         <div class="note-aside"><div class="note-title"><span class="note-id">[{note['id']}]</span><h4>{esc(note['title'])}</h4></div>{metric}{overturns}</div>{body}
       </div>"""
+
+
+def _note_groups(notes: list[dict], kind: str, project_key: str) -> str:
+    """按稳定主题分组；显式分类优先，兼容旧数据的“未分类”固定沉底。"""
+    grouped: dict[str, list[dict]] = {}
+    for note in notes:
+        grouped.setdefault(note.get('category') or '未分类', []).append(note)
+    categories = sorted(grouped, key=lambda value: value == '未分类')
+    anchors = {
+        category: f'{kind}-{project_key}-category-{index}'
+        for index, category in enumerate(categories, 1)
+    }
+    index_html = ''
+    if len(categories) > 1:
+        links = ''.join(
+            f'<a href="#{esc(anchors[category])}">{esc(category)} '
+            f'<b>{len(grouped[category])}</b></a>'
+            for category in categories
+        )
+        index_html = f'<nav class="category-index" aria-label="{esc(kind)} 分类">{links}</nav>'
+    groups = []
+    for index, category in enumerate(categories):
+        cards = '\n'.join(_note_card(note, kind) for note in grouped[category])
+        groups.append(f"""      <details class="note-group" id="{esc(anchors[category])}"{' open' if index == 0 else ''}>
+        <summary class="note-group-head"><h3>{esc(category)}</h3><span>{len(grouped[category])} 条</span></summary>
+        <div class="notes">
+{cards}
+        </div>
+      </details>""")
+    return index_html + '<div class="note-groups">' + '\n'.join(groups) + '</div>'
+
+
+def _link_groups(notes: list[dict], project_key: str) -> str:
+    grouped: dict[str, list[dict]] = {}
+    for note in notes:
+        grouped.setdefault(note.get('category') or '未分类', []).append(note)
+    categories = sorted(grouped, key=lambda value: value == '未分类')
+    anchors = {
+        category: f'link-{project_key}-category-{index}'
+        for index, category in enumerate(categories, 1)
+    }
+    index_html = ''
+    if len(categories) > 1:
+        links = ''.join(
+            f'<a href="#{esc(anchors[category])}">{esc(category)} '
+            f'<b>{len(grouped[category])}</b></a>' for category in categories
+        )
+        index_html = f'<nav class="category-index" aria-label="link 分类">{links}</nav>'
+    groups = []
+    for index, category in enumerate(categories):
+        items = '\n'.join(
+            f'          <div data-filter-item data-search="{esc((str(note.get("category") or "") + " " + str(note.get("title") or "") + " " + str(note.get("body") or "")).casefold())}"><code>{esc(note["title"])}</code> {render_inline_markdown(note.get("body") or "")}</div>'
+            for note in grouped[category]
+        )
+        groups.append(f"""      <details class="note-group" id="{esc(anchors[category])}"{' open' if index == 0 else ''}>
+        <summary class="note-group-head"><h3>{esc(category)}</h3><span>{len(grouped[category])} 条</span></summary>
+        <div class="linklist">
+{items}
+        </div>
+      </details>""")
+    return index_html + '<div class="note-groups">' + '\n'.join(groups) + '</div>'
 
 
 def _project_section(project: dict, live: bool = False) -> str:
@@ -826,33 +936,24 @@ def _project_section(project: dict, live: bool = False) -> str:
     </section>"""]
 
     if project['findings']:
-        cards = '\n'.join(_note_card(note, 'finding') for note in project['findings'])
+        groups = _note_groups(project['findings'], 'finding', project['key'])
         blocks.append(f"""    <section data-project="{esc(project['key'])}" data-kind="findings">
       <div class="sec-head"><h2>约束性结论</h2><span class="key">{esc(project['key'])} · 已判定,不再推演</span></div>
-      <div class="notes">
-{cards}
-      </div>
+{groups}
     </section>""")
 
     if project['risks']:
-        cards = '\n'.join(_note_card(note, 'risk') for note in project['risks'])
+        groups = _note_groups(project['risks'], 'risk', project['key'])
         blocks.append(f"""    <section data-project="{esc(project['key'])}" data-kind="risks">
       <div class="sec-head"><h2>尾巴与风险</h2><span class="key">{esc(project['key'])}</span></div>
-      <div class="notes">
-{cards}
-      </div>
+{groups}
     </section>""")
 
     if project['links']:
-        items = '\n'.join(
-            f'        <div data-filter-item data-search="{esc((str(note.get("title") or "") + " " + str(note.get("body") or "")).casefold())}"><code>{esc(note["title"])}</code> {render_inline_markdown(note.get("body") or "")}</div>'
-            for note in project['links']
-        )
+        groups = _link_groups(project['links'], project['key'])
         blocks.append(f"""    <section data-project="{esc(project['key'])}" data-kind="links">
       <div class="sec-head"><h2>关键文件</h2><span class="key">{esc(project['key'])}</span></div>
-      <div class="linklist">
-{items}
-      </div>
+{groups}
     </section>""")
 
     return '\n'.join(blocks)
@@ -893,16 +994,23 @@ def _dialogs(projects: list[dict], write_enabled: bool) -> str:
             f'<option value="{esc(project["key"])}">{esc(project["name"])} · {esc(project["key"])}</option>'
             for project in projects
         )
+        category_map = {
+            project['key']: sorted({
+                note['category'] for note in project['findings'] if note.get('category')
+            })
+            for project in projects
+        }
+        category_data = esc(json.dumps(category_map, ensure_ascii=False))
         create_dialog = f"""
   <dialog id="create-dialog">
     <div class="dialog-shell">
       <div class="dialog-head"><div><h2>新建任务</h2><div class="meta">支持 Markdown；复杂编辑仍建议在 Codex 对话中完成</div></div><button type="button" class="action" data-close>关闭</button></div>
-      <form class="dialog-body create-form">
+      <form class="dialog-body create-form" data-categories="{category_data}">
         <input type="hidden" name="kind" value="task">
         <div class="form-row"><label>项目<select name="project" required>{options}</select></label><label>标题<input name="title" required maxlength="240"></label></div>
         <label>正文<textarea name="body" placeholder="支持段落、列表、引用、代码块与安全链接"></textarea></label>
         <div class="form-row" data-task-only><label>负责人<input name="owner" placeholder="例如 我"></label><label>验收条件<input name="accept"></label></div>
-        <label data-finding-only hidden>度量/证据<input name="metric"></label>
+        <div class="form-row" data-finding-only hidden><label>分类<input name="category" list="finding-categories" maxlength="40" placeholder="复用本项目已有主题"><datalist id="finding-categories"></datalist></label><label>度量/证据<input name="metric"></label></div>
         <div class="form-error" role="alert"></div>
         <div><button type="submit" class="action primary">保存</button></div>
       </form>

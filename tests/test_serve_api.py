@@ -120,7 +120,8 @@ def test_live_page_create_task_finding_and_read_detail(tmp_path):
         assert status == 201 and value['ref'] == 1
 
         note_payload = json.dumps({
-            'project': 'demo', 'title': '网页结论', 'body': '> 已验证', 'metric': '54 passed',
+            'project': 'demo', 'title': '网页结论', 'body': '> 已验证',
+            'metric': '54 passed', 'category': '交付状态',
         }, ensure_ascii=False)
         status, _, value = request(
             port, 'POST', '/api/notes', note_payload.encode(), write_headers(port),
@@ -142,6 +143,7 @@ def test_live_page_create_task_finding_and_read_detail(tmp_path):
     store = Store(db_path)
     assert store.get_task('demo', 1)['owner'] == '我'
     assert store.get_note(1)['metric'] == '54 passed'
+    assert store.get_note(1)['category'] == '交付状态'
     store.close()
 
 

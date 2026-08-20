@@ -119,15 +119,21 @@ board add "发布新版" --accept "核心流程冒烟通过" --branch codex/site
 长期项目里真正会被遗忘的不是待办,而是**已经查明的结论**——不写下来就会重复推演。
 
 ```bash
-board finding "移动端首屏慢在大图" --metric "LCP 4.2s → 1.8s" --body "压缩图片后的对照结果..."
-board risk "旧浏览器样式降级" --body "不阻塞上线,后续补兼容验证"
-board link "docs/release-checklist.md" --body "发布验收清单"
+board finding "移动端首屏慢在大图" --category "性能" --metric "LCP 4.2s → 1.8s" --body "压缩图片后的对照结果..."
+board risk "旧浏览器样式降级" --category "兼容性" --body "不阻塞上线,后续补兼容验证"
+board link "docs/release-checklist.md" --category "发布" --body "发布验收清单"
 board notes -v            # 一起看
+board note-category 12 18 --category "性能"  # 给已有记录归类
 ```
 
 - `finding` 约束性结论:已判定的事实,后续不要再推演
 - `risk` 尾巴与已知风险:不阻塞主线但别丢
 - `link` 关键文件/入口
+
+结论和风险按 `category` 分组展示，分类会进入 CLI、实时页面、静态导出和 JSON。每个项目
+建议维护 2~6 个稳定主题，用“模型口径”“事实补录”“发布协同”这类短名词；不要把分类
+写成状态、日期或一次性标签。未填写的旧记录会安全落入“未分类”，可用
+`board note-category` 逐步回填，不需要迁移或重建数据库。
 
 ### Markdown 内容
 

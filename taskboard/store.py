@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS notes (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     project     TEXT NOT NULL REFERENCES projects(key) ON DELETE CASCADE,
     kind        TEXT NOT NULL,
+    category    TEXT,
     title       TEXT NOT NULL,
     body        TEXT,
     metric      TEXT,
@@ -132,7 +133,9 @@ class Store:
 
     def _migrate(self) -> None:
         """就地补列:老库直接用新版本打开即可,不需要单独的迁移命令。"""
-        self._add_columns('notes', {'superseded_by': 'INTEGER', 'superseded_at': 'TEXT'})
+        self._add_columns('notes', {
+            'category': 'TEXT', 'superseded_by': 'INTEGER', 'superseded_at': 'TEXT',
+        })
         self._add_columns('tasks', {'accept': 'TEXT', 'branch': 'TEXT', 'pr': 'TEXT'})
         self._add_columns('projects', {'artifact_url': 'TEXT'})
 
@@ -370,21 +373,25 @@ class Store:
     # ── 结论 / 风险 ─────────────────────────────────────────────────────
     def add_note(self, project: str, kind: str, title: str,
                  body: str | None = None, metric: str | None = None,
-                 supersedes: list[int] | None = None) -> sqlite3.Row:
+                 supersedes: list[int] | None = None,
+                 category: str | None = None) -> sqlite3.Row:
         self.get_project(project)
         if kind not in NOTE_KINDS:
             raise BoardError(f'类型只能是 {"/".join(NOTE_KINDS)},收到 {kind}')
+        category = self._normalize_category(category)
         # 先校验待推翻的记录,避免建了新记录才发现引用有误
         targets = [self.get_note(note_id) for note_id in supersedes or []]
         for target in targets:
             if target['project'] != project:
                 raise BoardError(f'记录 {target["id"]} 属于项目 {target["project"]},不能跨项目推翻')
         cursor = self.conn.execute(
-            'INSERT INTO notes (project, kind, title, body, metric, created_at) VALUES (?,?,?,?,?,?)',
-            (project, kind, title, body, metric, now_iso()),
+            'INSERT INTO notes (project, kind, category, title, body, metric, created_at)'
+            ' VALUES (?,?,?,?,?,?,?)',
+            (project, kind, category, title, body, metric, now_iso()),
         )
         note_id = cursor.lastrowid
-        self.log_event('note_added', project=project, kind=kind, title=title)
+        self.log_event('note_added', project=project, kind=kind, title=title,
+                       category=category)
         for target in targets:
             self._supersede(target, note_id)
         self.conn.commit()
@@ -395,6 +402,31 @@ class Store:
         if row is None:
             raise BoardError(f'没有这条记录: {note_id}')
         return row
+
+    @staticmethod
+    def _normalize_category(category: str | None) -> str | None:
+        if category is None:
+            return None
+        if not isinstance(category, str):
+            raise BoardError('category 必须是文本')
+        value = category.strip()
+        if not value:
+            return None
+        if '\n' in value or '\r' in value:
+            raise BoardError('分类必须保持单行')
+        if len(value) > 40:
+            raise BoardError('分类不能超过 40 个字符')
+        return value
+
+    def set_note_category(self, note_id: int, category: str | None) -> sqlite3.Row:
+        """给已有记录归类；空字符串用于移回“未分类”。"""
+        note = self.get_note(note_id)
+        category = self._normalize_category(category)
+        self.conn.execute('UPDATE notes SET category = ? WHERE id = ?', (category, note_id))
+        self.log_event('note_category_changed', project=note['project'], note_id=note_id,
+                       old=note['category'], new=category)
+        self.conn.commit()
+        return self.get_note(note_id)
 
     def _supersede(self, target: sqlite3.Row, by_note_id: int) -> None:
         if target['id'] == by_note_id:

@@ -74,17 +74,23 @@ def test_dropped_tasks_are_not_actionable(store):
 
 
 def test_notes_split_by_kind_and_gates_exclude_done(store):
-    store.add_note('demo', 'finding', '结论一', body='正文', metric='40/40')
+    finding = store.add_note(
+        'demo', 'finding', '结论一', body='正文', metric='40/40', category='模型口径',
+    )
     store.add_note('demo', 'risk', '尾巴一')
     gate = store.add_task('demo', '闸门任务', gate=True)
 
     snapshot = store.snapshot()['projects'][0]
     assert [n['title'] for n in snapshot['findings']] == ['结论一']
+    assert snapshot['findings'][0]['category'] == '模型口径'
     assert [n['title'] for n in snapshot['risks']] == ['尾巴一']
     assert snapshot['gates'] == [gate['ref']]
 
     store.set_status('demo', gate['ref'], 'done')
     assert store.snapshot()['projects'][0]['gates'] == []
+
+    updated = store.set_note_category(finding['id'], '部署状态')
+    assert updated['category'] == '部署状态'
 
 
 def test_invalid_status_and_kind_rejected(store):
@@ -93,6 +99,10 @@ def test_invalid_status_and_kind_rejected(store):
         store.set_status('demo', task['ref'], 'finished')
     with pytest.raises(BoardError):
         store.add_note('demo', 'todo', '类型不对')
+    with pytest.raises(BoardError):
+        store.add_note('demo', 'finding', '分类过长', category='x' * 41)
+    with pytest.raises(BoardError):
+        store.add_note('demo', 'finding', '分类换行', category='模型\n口径')
 
 
 def test_events_are_recorded(store):

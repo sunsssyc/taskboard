@@ -242,10 +242,11 @@ def make_handler(db_path: str, title: str, include_archived: bool, dev: bool = F
                     title_value = self._required_text(data, 'title')
                     body = self._optional_text(data, 'body')
                     metric = self._optional_text(data, 'metric', 2_000)
+                    category = self._optional_text(data, 'category', 40)
                     store_module.validate_markdown_newlines(body)
                     note = store.add_note(
                         project, 'finding', title_value, body=body,
-                        metric=metric,
+                        metric=metric, category=category,
                     )
                     self._json({'ok': True, 'project': project, 'id': note['id']}, 201)
                     return

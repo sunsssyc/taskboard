@@ -79,10 +79,15 @@ ANSI-C 单引号。如果确实要展示转义符，把它放进行内代码，�
 ## 沉淀结论与风险
 
 ```bash
-board finding "结论" --metric "关键数字" --body "证据与推论"
-board risk "遗留风险" --body "为什么暂不阻塞主线"
-board link "path/to/file" --body "文件用途"
+board finding "结论" --category "模型口径" --metric "关键数字" --body "证据与推论"
+board risk "遗留风险" --category "发布协同" --body "为什么暂不阻塞主线"
+board link "path/to/file" --category "关键入口" --body "文件用途"
+board note-category <id...> --category "模型口径"
 ```
+
+同一项目复用 2~6 个稳定分类，使用短名词主题（例如“模型口径”“事实补录”“发布协同”），
+不要按日期、任务状态或单条结论临时造分类。写新记录前先看 `board notes` 已有分组；没有合适
+主题时再新增。旧记录没有分类时会显示在“未分类”，确认主题后用 `board note-category` 回填。
 
 只在旧 finding 的核心判断已经失效、且新 finding 能完整替代它时使用 `supersede`。
 修复缺陷、补充证据、增加适用边界或推进交付状态时，如果旧判断仍成立，就并列记录。

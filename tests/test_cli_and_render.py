@@ -45,6 +45,23 @@ def test_cli_ls_hides_done_until_flag(db, capsys):
     assert '做完的' in capsys.readouterr().out
 
 
+def test_cli_notes_group_and_reclassify(db, capsys):
+    run(db, 'init', 'demo', '--name', '结论分类')
+    run(db, 'finding', '模型已定', '--category', '模型口径', '-p', 'demo')
+    run(db, 'finding', '已部署', '--category', '交付状态', '-p', 'demo')
+    capsys.readouterr()
+
+    assert run(db, 'notes', '-p', 'demo') == 0
+    output = capsys.readouterr().out
+    assert '模型口径 · 1' in output and '交付状态 · 1' in output
+
+    assert run(db, 'note-category', '1', '--category', '交付状态') == 0
+    capsys.readouterr()
+    store = Store(db)
+    assert store.get_note(1)['category'] == '交付状态'
+    store.close()
+
+
 def test_cli_resolves_project_from_cwd(db, tmp_path, monkeypatch, capsys):
     repo = tmp_path / 'myrepo'
     repo.mkdir()
@@ -152,6 +169,28 @@ def test_render_long_notes_use_full_width_reading_layout(tmp_path):
     assert '@media (max-width:760px)' in html
 
 
+def test_render_groups_findings_by_category_with_uncategorized_last(tmp_path):
+    store = Store(tmp_path / 'categories.db')
+    store.create_project('demo', '结论分类')
+    store.add_note('demo', 'finding', '采样口径', category='模型口径')
+    store.add_note('demo', 'finding', '发版完成', category='交付状态')
+    store.add_note('demo', 'finding', '旧数据')
+    store.add_note('demo', 'link', 'docs/model.md', category='模型口径')
+    html = render(store.snapshot())
+    store.close()
+
+    assert 'class="category-index"' in html
+    assert '<h3>模型口径</h3><span>1 条</span>' in html
+    assert '<h3>交付状态</h3><span>1 条</span>' in html
+    assert '<h3>未分类</h3><span>1 条</span>' in html
+    assert html.index('<h3>未分类</h3>') > html.index('<h3>交付状态</h3>')
+    assert 'data-search="1 模型口径 采样口径' in html
+    assert html.count('id="finding-demo-category-') == 3
+    assert html.count('class="note-group" id="finding-demo-category-1" open') == 1
+    assert 'class="note-group" id="link-demo-category-1" open' in html
+    assert 'data-search="模型口径 docs/model.md' in html
+
+
 def test_safe_markdown_renders_supported_blocks_and_rejects_unsafe_html():
     rendered = render_markdown("""## 当前判断
 
@@ -211,6 +250,7 @@ def test_live_render_has_interactions_but_static_export_stays_read_only(tmp_path
     store = Store(tmp_path / 'interactive.db')
     store.create_project('demo', '交互看板')
     store.add_task('demo', '可操作任务', detail='**说明**', owner='我')
+    store.add_note('demo', 'finding', '分类提示', category='模型口径')
     snapshot = store.snapshot()
     store.close()
 
@@ -220,6 +260,9 @@ def test_live_render_has_interactions_but_static_export_stays_read_only(tmp_path
     assert 'name="query"' in live_html and 'name="status"' in live_html
     assert 'class="detail-button"' in live_html
     assert 'data-create="task"' in live_html and 'data-create="finding"' in live_html
+    assert 'name="category"' in live_html
+    assert 'list="finding-categories"' in live_html and '模型口径' in live_html
+    assert "var createForm = createDialog ?" in live_html
     assert 'data-status="done"' in live_html
     assert 'data-csrf="test-csrf"' in live_html
     assert '/api/tasks/' in live_html

@@ -233,9 +233,13 @@ def test_legacy_db_gets_all_new_columns(tmp_path):
             ref INTEGER NOT NULL, title TEXT NOT NULL, detail TEXT,
             status TEXT NOT NULL DEFAULT 'todo', owner TEXT, gate INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (project, ref));
+        CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL,
+            kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT, metric TEXT, created_at TEXT NOT NULL);
         INSERT INTO projects VALUES ('demo','老库',NULL,NULL,0,'2026-01-01','2026-01-01');
         INSERT INTO tasks (project, ref, title, created_at, updated_at)
             VALUES ('demo', 1, '老任务', '2026-01-01', '2026-01-01');
+        INSERT INTO notes (project, kind, title, created_at)
+            VALUES ('demo', 'finding', '老结论', '2026-01-01');
     """)
     conn.commit()
     conn.close()
@@ -245,6 +249,8 @@ def test_legacy_db_gets_all_new_columns(tmp_path):
         task = store.add_task('demo', '新任务', accept='验收条件', branch='b', pr='1')
         assert task['ref'] == 2
         assert store.get_task('demo', 1)['accept'] is None   # 老数据保持原样
+        assert store.get_note(1)['category'] is None
+        assert store.set_note_category(1, '历史口径')['category'] == '历史口径'
         store.update_project('demo', artifact_url='https://example.com')
         assert store.get_project('demo')['artifact_url'] == 'https://example.com'
     finally:
