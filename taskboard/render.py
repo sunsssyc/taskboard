@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import html
 import json
+import re
 from datetime import datetime
+from urllib.parse import urlsplit
 
 STATUS_LABEL = {'todo': '待办', 'active': '进行中', 'waiting': '等人工',
                 'done': '已完成', 'dropped': '已放弃'}
@@ -129,6 +131,7 @@ section[hidden] { display:none; }
 .step[data-status="dropped"] .card-top h3 { text-decoration:line-through; }
 .card p { margin:0; min-width:0; overflow-wrap:anywhere; font-size:13.5px; color:var(--ink-muted);
           max-width:76ch; }
+.card .markdown { max-width:76ch; font-size:13.5px; color:var(--ink-muted); }
 .chip { font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;
         padding:3px 8px; border-radius:2px; white-space:nowrap; border:1px solid transparent; }
 .chip.done { background:var(--done-soft); color:var(--done); border-color:var(--done); }
@@ -152,6 +155,26 @@ section[hidden] { display:none; }
 .dep { font-family:var(--mono); font-size:11.5px; color:var(--ink-faint); }
 .dep b { color:var(--alert); font-weight:600; }
 
+.markdown { min-width:0; overflow-wrap:anywhere; }
+.markdown > :first-child { margin-top:0; }
+.markdown > :last-child { margin-bottom:0; }
+.markdown p { margin:0 0 7px; }
+.markdown ul, .markdown ol { margin:5px 0 8px; padding-left:22px; }
+.markdown li { margin:2px 0; }
+.markdown blockquote { margin:7px 0; padding:2px 0 2px 11px; border-left:2px solid var(--accent);
+                      color:var(--ink-muted); }
+.markdown h5, .markdown h6 { margin:10px 0 5px; font-size:13px; line-height:1.45; font-weight:620; }
+.markdown code, .accept code { font-family:var(--mono); font-size:.92em; background:var(--sunken);
+                               border-radius:2px; padding:1px 4px; }
+.markdown pre { margin:7px 0; padding:10px 12px; overflow:auto; background:var(--sunken);
+                border:1px solid var(--rule-soft); border-radius:3px; white-space:pre; }
+.markdown pre code { padding:0; background:none; border-radius:0; white-space:inherit; overflow-wrap:normal; }
+.markdown a, .accept a, .linklist a { color:var(--accent); text-decoration:underline;
+                                     text-underline-offset:2px; }
+.markdown a:focus-visible, .accept a:focus-visible, .linklist a:focus-visible {
+  outline:2px solid var(--accent); outline-offset:2px; border-radius:2px;
+}
+
 .notes { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:12px; }
 .note { background:var(--surface); border:1px solid var(--rule); border-radius:4px; padding:13px 15px;
         display:flex; flex-direction:column; gap:5px; }
@@ -169,8 +192,8 @@ section[hidden] { display:none; }
 .note.long { grid-column:1/-1; display:grid; grid-template-columns:minmax(240px,.75fr) minmax(0,1.8fr);
              gap:8px 26px; align-items:start; }
 .note.long .note-aside { grid-column:1; grid-row:1; }
-.note.long > p { grid-column:2; grid-row:1; max-width:82ch; border-left:1px solid var(--rule-soft);
-                 padding-left:22px; }
+.note.long > .markdown { grid-column:2; grid-row:1; max-width:82ch;
+                         border-left:1px solid var(--rule-soft); padding-left:22px; }
 .note-ref { color:inherit; text-decoration:none; text-underline-offset:2px; }
 .note-ref:hover { color:var(--accent); text-decoration:underline; }
 .note-ref:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:2px; }
@@ -180,10 +203,10 @@ section[hidden] { display:none; }
 .note.superseded .tag { font-family:var(--mono); font-size:10.5px; letter-spacing:.05em;
                         color:var(--alert); border:1px solid var(--rule); border-radius:2px;
                         padding:1px 6px; margin-right:7px; white-space:nowrap; }
-.note.superseded p { margin-top:8px; font-size:13.5px; }
+.note.superseded .markdown { margin-top:8px; font-size:13.5px; }
 @media (max-width:760px) {
   .note.long { display:flex; }
-  .note.long > p { max-width:none; border-left:0; padding-left:0; }
+  .note.long > .markdown { max-width:none; border-left:0; padding-left:0; }
 }
 .linklist { display:flex; flex-direction:column; gap:5px; font-size:13.5px; color:var(--ink-muted); }
 .linklist code { font-family:var(--mono); font-size:12.5px; background:var(--sunken); padding:1px 5px;
@@ -254,6 +277,157 @@ def esc(value) -> str:
     return html.escape(str(value if value is not None else ''), quote=True)
 
 
+INLINE_CODE_RE = re.compile(r'`([^`\n]+)`')
+LINK_RE = re.compile(r'\[([^\]\n]+)\]\(([^)\n]+)\)')
+STRONG_RE = re.compile(r'\*\*([^*\n]+)\*\*')
+EMPHASIS_RE = re.compile(r'(?<!\*)\*([^*\n]+)\*(?!\*)')
+UNORDERED_ITEM_RE = re.compile(r'^\s*[-+*]\s+(.+)$')
+ORDERED_ITEM_RE = re.compile(r'^\s*\d+\.\s+(.+)$')
+HEADING_RE = re.compile(r'^(#{1,4})\s+(.+)$')
+FENCE_RE = re.compile(r'^```\s*([A-Za-z0-9_+-]*)\s*$')
+
+
+def _safe_markdown_href(value: str) -> str | None:
+    """只允许 Web/mail 链接与普通相对路径；拒绝 javascript/data 等协议。"""
+    href = html.unescape(value).strip()
+    normalized = re.sub(r'[\x00-\x20\x7f]+', '', href)
+    if not normalized or normalized.startswith('//'):
+        return None
+    scheme = urlsplit(normalized).scheme.lower()
+    return href if scheme in ('', 'http', 'https', 'mailto') else None
+
+
+def render_inline_markdown(value: str | None) -> str:
+    """渲染安全的行内 Markdown 子集；原始 HTML 始终先转义。"""
+    text = str(value or '')
+    tokens: list[str] = []
+
+    def stash(rendered: str) -> str:
+        marker = f'\ue000{len(tokens)}\ue001'
+        tokens.append(rendered)
+        return marker
+
+    text = INLINE_CODE_RE.sub(
+        lambda match: stash(f'<code>{esc(match.group(1))}</code>'), text,
+    )
+
+    def render_link(match: re.Match) -> str:
+        href = _safe_markdown_href(match.group(2))
+        if href is None:
+            return match.group(0)
+        scheme = urlsplit(href).scheme.lower()
+        external = ' target="_blank" rel="noopener noreferrer"' if scheme else ''
+        label = render_inline_markdown(match.group(1))
+        return stash(f'<a href="{esc(href)}"{external}>{label}</a>')
+
+    text = LINK_RE.sub(render_link, text)
+    rendered = esc(text)
+    rendered = STRONG_RE.sub(r'<strong>\1</strong>', rendered)
+    rendered = EMPHASIS_RE.sub(r'<em>\1</em>', rendered)
+    for index, token in enumerate(tokens):
+        rendered = rendered.replace(f'\ue000{index}\ue001', token)
+    return rendered
+
+
+def render_markdown(value: str | None) -> str:
+    """纯标准库 Markdown:段落、标题、列表、引用、代码块与安全行内格式。"""
+    lines = str(value or '').replace('\r\n', '\n').replace('\r', '\n').split('\n')
+    blocks: list[str] = []
+    paragraph: list[str] = []
+    list_kind: str | None = None
+    list_items: list[str] = []
+    quote_lines: list[str] = []
+    code_lines: list[str] = []
+    code_language = ''
+    in_code = False
+
+    def flush_paragraph() -> None:
+        if paragraph:
+            text = ' '.join(part.strip() for part in paragraph)
+            blocks.append(f'<p>{render_inline_markdown(text)}</p>')
+            paragraph.clear()
+
+    def flush_list() -> None:
+        nonlocal list_kind
+        if list_kind and list_items:
+            items = ''.join(f'<li>{render_inline_markdown(item)}</li>' for item in list_items)
+            blocks.append(f'<{list_kind}>{items}</{list_kind}>')
+        list_kind = None
+        list_items.clear()
+
+    def flush_quote() -> None:
+        if quote_lines:
+            text = ' '.join(part.strip() for part in quote_lines)
+            blocks.append(f'<blockquote><p>{render_inline_markdown(text)}</p></blockquote>')
+            quote_lines.clear()
+
+    def flush_code() -> None:
+        language = f' class="language-{esc(code_language)}"' if code_language else ''
+        blocks.append(f'<pre><code{language}>{esc(chr(10).join(code_lines))}</code></pre>')
+        code_lines.clear()
+
+    for line in lines:
+        fence = FENCE_RE.match(line)
+        if in_code:
+            if fence:
+                flush_code()
+                in_code = False
+                code_language = ''
+            else:
+                code_lines.append(line)
+            continue
+        if fence:
+            flush_paragraph()
+            flush_list()
+            flush_quote()
+            in_code = True
+            code_language = fence.group(1)
+            continue
+        if not line.strip():
+            flush_paragraph()
+            flush_list()
+            flush_quote()
+            continue
+
+        heading = HEADING_RE.match(line)
+        if heading:
+            flush_paragraph()
+            flush_list()
+            flush_quote()
+            level = 5 if len(heading.group(1)) <= 2 else 6
+            blocks.append(f'<h{level}>{render_inline_markdown(heading.group(2))}</h{level}>')
+            continue
+
+        unordered = UNORDERED_ITEM_RE.match(line)
+        ordered = ORDERED_ITEM_RE.match(line)
+        if unordered or ordered:
+            flush_paragraph()
+            flush_quote()
+            kind = 'ul' if unordered else 'ol'
+            if list_kind and list_kind != kind:
+                flush_list()
+            list_kind = kind
+            list_items.append((unordered or ordered).group(1))
+            continue
+
+        if line.lstrip().startswith('>'):
+            flush_paragraph()
+            flush_list()
+            quote_lines.append(line.lstrip()[1:].lstrip())
+            continue
+
+        flush_list()
+        flush_quote()
+        paragraph.append(line)
+
+    if in_code:
+        flush_code()
+    flush_paragraph()
+    flush_list()
+    flush_quote()
+    return ''.join(blocks)
+
+
 def _fmt_stamp(iso: str) -> str:
     try:
         return datetime.fromisoformat(iso).strftime('%Y-%m-%d %H:%M UTC')
@@ -315,9 +489,12 @@ def _task_card(task: dict) -> str:
     if task['blocks']:
         dep_bits.append('阻塞 → #' + ', #'.join(str(r) for r in task['blocks']))
     dep_html = f'<div class="dep">{" · ".join(dep_bits)}</div>' if dep_bits else ''
-    detail_html = f'<p>{esc(task["detail"])}</p>' if task['detail'] else ''
+    detail_html = (
+        f'<div class="markdown card-detail">{render_markdown(task["detail"])}</div>'
+        if task['detail'] else ''
+    )
     accept_html = (
-        f'<div class="accept"><b>验收</b>{esc(task["accept"])}</div>'
+        f'<div class="accept"><b>验收</b>{render_inline_markdown(task["accept"])}</div>'
         if task.get('accept') and task['status'] != 'done' else ''
     )
 
@@ -335,11 +512,11 @@ def _note_card(note: dict, kind: str) -> str:
         # 折叠成一行:保留"曾经这么认为"的痕迹,但不与当前结论争夺注意力
         return f"""      <details class="note superseded" id="note-{note['id']}">
         <summary><span class="note-id">[{note['id']}]</span> <a class="tag note-ref" href="#note-{note['superseded_by']}">已被 [{note['superseded_by']}] 推翻</a> {esc(note['title'])}</summary>
-        {f'<p>{esc(note["body"])}</p>' if note.get('body') else ''}
+        {f'<div class="markdown">{render_markdown(note["body"])}</div>' if note.get('body') else ''}
       </details>"""
     metric = f'<div class="metric">{esc(note["metric"])}</div>' if note.get('metric') else ''
     body_text = note.get('body') or ''
-    body = f'<p>{esc(body_text)}</p>' if body_text else ''
+    body = f'<div class="markdown note-body">{render_markdown(body_text)}</div>' if body_text else ''
     layout_class = ' long' if len(body_text) >= LONG_NOTE_BODY_CHARS else ''
     overturned_refs = ', '.join(
         f'<a class="note-ref" href="#note-{note_id}">[{note_id}]</a>'
@@ -399,7 +576,7 @@ def _project_section(project: dict) -> str:
 
     if project['links']:
         items = '\n'.join(
-            f'        <div><code>{esc(note["title"])}</code> {esc(note.get("body") or "")}</div>'
+            f'        <div><code>{esc(note["title"])}</code> {render_inline_markdown(note.get("body") or "")}</div>'
             for note in project['links']
         )
         blocks.append(f"""    <section data-project="{esc(project['key'])}">

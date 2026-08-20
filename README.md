@@ -129,6 +129,15 @@ board notes -v            # 一起看
 - `risk` 尾巴与已知风险:不阻塞主线但别丢
 - `link` 关键文件/入口
 
+### Markdown 内容
+
+任务 `detail`、finding/risk 的 `body` 支持安全 Markdown:段落、标题、无序/有序列表、
+引用、粗体/斜体、行内代码、围栏代码块和 HTTP/HTTPS/mailto/相对链接。验收条件与
+关键文件说明支持行内格式。标题和 `metric` 保持纯文本结构化字段。
+
+原始 HTML 会被转义，`javascript:`/`data:` 等危险链接不会生成可点击链接。图片、表格、
+复杂嵌套列表暂不支持；完整材料应保存在文件中，再用 `board link` 记录入口。
+
 ## 查看
 
 ```bash

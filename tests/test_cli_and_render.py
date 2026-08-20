@@ -3,7 +3,7 @@ import json
 import pytest
 
 from taskboard.cli import main
-from taskboard.render import render
+from taskboard.render import render, render_markdown
 from taskboard.store import Store
 
 
@@ -150,3 +150,58 @@ def test_render_long_notes_use_full_width_reading_layout(tmp_path):
     assert 'grid-template-columns:32px minmax(0,1fr)' in html
     assert 'overflow-wrap:anywhere' in html
     assert '@media (max-width:760px)' in html
+
+
+def test_safe_markdown_renders_supported_blocks_and_rejects_unsafe_html():
+    rendered = render_markdown("""## 当前判断
+
+**影响明确**，字段 `sampling_policy` 已固定。
+
+- 证据一
+- 证据二
+
+1. 先验证
+2. 再发布
+
+> 不要跳过回归测试。
+
+```python
+print("<unsafe>")
+```
+
+[安全链接](https://example.com/docs?a=1&b=2)
+[危险链接](javascript:alert(1))
+[实体伪装](java&#x73;cript:alert(1))
+[控制字符伪装](java\tscript:alert(1))
+<script>alert(1)</script>
+""")
+
+    assert '<h5>当前判断</h5>' in rendered
+    assert '<strong>影响明确</strong>' in rendered
+    assert '<code>sampling_policy</code>' in rendered
+    assert '<ul><li>证据一</li><li>证据二</li></ul>' in rendered
+    assert '<ol><li>先验证</li><li>再发布</li></ol>' in rendered
+    assert '<blockquote><p>不要跳过回归测试。</p></blockquote>' in rendered
+    assert '<pre><code class="language-python">print(&quot;&lt;unsafe&gt;&quot;)</code></pre>' in rendered
+    assert 'href="https://example.com/docs?a=1&amp;b=2"' in rendered
+    assert rendered.count('<a href=') == 1
+    assert 'href="javascript:' not in rendered and 'href="java&amp;#x73;cript:' not in rendered
+    assert '<script>' not in rendered and '&lt;script&gt;' in rendered
+
+
+def test_task_and_note_fields_render_markdown(tmp_path):
+    store = Store(tmp_path / 'markdown.db')
+    store.create_project('demo', 'Markdown')
+    store.add_task('demo', '结构化任务', detail='**影响**\n\n- 补测试', accept='运行 `pytest`')
+    store.add_note('demo', 'finding', '结构化结论', body='> 已验证\n\n查看 [文档](docs/check.md)')
+    store.add_note('demo', 'link', 'docs/check.md', body='查看 **支持范围**')
+    html = render(store.snapshot())
+    store.close()
+
+    assert 'class="markdown card-detail"' in html
+    assert '<strong>影响</strong>' in html and '<li>补测试</li>' in html
+    assert '<div class="accept"><b>验收</b>运行 <code>pytest</code></div>' in html
+    assert 'class="markdown note-body"' in html
+    assert '<blockquote><p>已验证</p></blockquote>' in html
+    assert '<a href="docs/check.md">文档</a>' in html
+    assert '<code>docs/check.md</code> 查看 <strong>支持范围</strong>' in html
