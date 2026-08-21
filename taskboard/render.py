@@ -213,13 +213,14 @@ section[hidden] { display:none; }
 .node { width:48px; min-height:42px; display:grid; place-items:start center; padding-top:10px;
         font-family:var(--mono); font-size:10.5px; font-variant-numeric:tabular-nums;
         background:transparent; border:0; color:var(--ink-faint); }
-.task-disclosure { min-width:38px; min-height:24px; padding:0 3px; display:flex; align-items:center;
-  justify-content:center; gap:5px; border:0; border-radius:4px; background:none; color:inherit;
-  font:inherit; cursor:pointer; }
-.task-disclosure::before { content:''; width:6px; height:6px; flex:0 0 6px;
+.task-disclosure { position:relative; width:100%; min-width:38px; min-height:24px; padding:0;
+  border:0; border-radius:4px; background:none; color:inherit; font:inherit; cursor:pointer; }
+.task-disclosure::before { content:''; position:absolute; left:50%; top:50%; width:6px; height:6px;
   border-right:1.6px solid currentColor; border-bottom:1.6px solid currentColor;
-  transform:rotate(-45deg); transition:transform .15s ease; }
-.task-disclosure[aria-expanded="true"]::before { transform:rotate(45deg); }
+  transform:translate(-50%,-50%) rotate(-45deg); transition:transform .15s ease; }
+.task-disclosure[aria-expanded="true"]::before { transform:translate(-50%,-50%) rotate(45deg); }
+.task-disclosure > span { position:absolute; left:calc(50% + 8px); top:50%;
+  transform:translateY(-50%); }
 .task-disclosure:hover { color:var(--accent); background:rgba(0,122,255,.08); }
 .task-disclosure:focus-visible { outline:0; box-shadow:var(--ring); }
 @media (prefers-reduced-motion: reduce) { .task-disclosure::before { transition:none; } }
@@ -285,6 +286,12 @@ details[open] > summary::before { transform:rotate(45deg); }
 .done-fold summary::before, .active-fold summary::before,
 .blocked-fold summary::before, .dropped-fold summary::before {
   grid-column:1; justify-self:center; margin:0; }
+/* 分组 summary 是父节点；折叠组内任务向右缩进一层，避免与父节点同级。 */
+.done-fold > .step, .active-fold > .step,
+.blocked-fold > .step, .dropped-fold > .step {
+  grid-template-columns:64px minmax(0,1fr); }
+.done-fold > .step > .node, .active-fold > .step > .node,
+.blocked-fold > .step > .node, .dropped-fold > .step > .node { width:64px; }
 .chip.dropped { background:var(--wait-soft); color:var(--ink-faint); }
 .chip.gate { background:var(--alert-soft); color:var(--alert); }
 .chip.who { background:var(--accent-soft); color:var(--accent); }
@@ -441,6 +448,11 @@ dialog::backdrop { background:rgba(0,0,0,.07); backdrop-filter:none; }
   .node { width:42px; }
   .done-fold summary, .active-fold summary, .blocked-fold summary, .dropped-fold summary {
     grid-template-columns:42px minmax(0,1fr); }
+  .done-fold > .step, .active-fold > .step,
+  .blocked-fold > .step, .dropped-fold > .step {
+    grid-template-columns:56px minmax(0,1fr); }
+  .done-fold > .step > .node, .active-fold > .step > .node,
+  .blocked-fold > .step > .node, .dropped-fold > .step > .node { width:56px; }
   dialog { inset:0; width:auto; }
   .detail-grid, .form-row { grid-template-columns:1fr; }
   .event { grid-template-columns:1fr; gap:2px; }

@@ -144,6 +144,12 @@ def test_render_uses_xcode_style_light_workspace(tmp_path):
     assert 'background:var(--ground)' in html
     assert '.done-fold summary, .active-fold summary, .blocked-fold summary, .dropped-fold summary {' in html
     assert 'grid-template-columns:48px minmax(0,1fr); align-items:center' in html
+    assert '.done-fold > .step, .active-fold > .step,' in html
+    assert 'grid-template-columns:64px minmax(0,1fr)' in html
+    assert 'grid-template-columns:56px minmax(0,1fr)' in html
+    assert '.task-disclosure { position:relative; width:100%' in html
+    assert 'transform:translate(-50%,-50%) rotate(-45deg)' in html
+    assert '.task-disclosure > span { position:absolute; left:calc(50% + 8px)' in html
 
 
 def test_render_marks_gate_and_blocking(tmp_path):
