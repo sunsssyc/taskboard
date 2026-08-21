@@ -293,9 +293,10 @@ def test_overview_cards_are_toggle_buttons_with_sections_tagged(tmp_path):
     assert 'section[hidden] { display:none; }' in html
 
 
-def test_single_project_needs_no_switching(tmp_path):
+def test_single_project_keeps_explicit_all_projects_context(tmp_path):
     store = Store(tmp_path / 'one.db')
     store.create_project('solo', '独苗')
     html = render(store.snapshot())
     store.close()
-    assert 'cards.length < 2' in html   # 脚本自己短路,不给单项目加无意义交互
+    assert 'class="pcard all-projects" data-project="" aria-pressed="true"' in html
+    assert '<h3>全部项目</h3><div class="key">1 projects</div>' in html

@@ -130,14 +130,17 @@ def test_render_escapes_html(tmp_path):
     assert '&amp;' in html
 
 
-def test_render_theme_tokens_cover_three_states(tmp_path):
+def test_render_uses_xcode_style_light_workspace(tmp_path):
     store = Store(tmp_path / 'board.db')
     store.create_project('x', '主题检查')
     html = render(store.snapshot())
     store.close()
-    assert 'prefers-color-scheme: dark' in html
-    assert ':root:not([data-theme="light"])' in html
-    assert ':root[data-theme="dark"]' in html
+    assert 'color-scheme:light' in html
+    assert '--chrome:#f7f7f8' in html
+    assert 'grid-template-columns:248px minmax(0,1fr)' in html
+    assert 'class="navigator" aria-label="项目导航"' in html
+    assert '<main class="content">' in html
+    assert 'prefers-color-scheme: dark' not in html
     assert 'background:var(--ground)' in html
 
 
@@ -164,7 +167,8 @@ def test_render_long_notes_use_full_width_reading_layout(tmp_path):
     assert 'class="note finding long" id="note-2"' in html
     assert 'grid-column:1/-1' in html
     assert 'grid-template-columns:minmax(240px,.75fr) minmax(0,1.8fr)' in html
-    assert 'grid-template-columns:32px minmax(0,1fr)' in html
+    assert 'grid-template-columns:38px minmax(0,1fr)' in html
+    assert '.notes { display:flex; flex-direction:column' in html
     assert 'overflow-wrap:anywhere' in html
     assert '@media (max-width:760px)' in html
 
@@ -267,6 +271,7 @@ def test_live_render_has_interactions_but_static_export_stays_read_only(tmp_path
     assert 'data-csrf="test-csrf"' in live_html
     assert '/api/tasks/' in live_html
     assert "current.task.accept ? '\\n\\n验收条件" in live_html
+    assert 'inset:0 0 0 auto' in live_html and '--inspector-shadow' in live_html
 
     static_html = render(snapshot)
     assert 'name="query"' in static_html  # 搜索筛选仍是纯前端只读交互
