@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 from .render import STATUS_LABEL, html_document, render, render_json
-from .store import BoardError, Store, home_dir, validate_markdown_newlines
+from .store import BoardError, Store, home_dir, load_view_prefs, validate_markdown_newlines
 
 CURRENT_FILE = 'current'
 
@@ -518,7 +518,10 @@ def cmd_export(store: Store, args) -> int:
     if args.json:
         output = render_json(snapshot)
     else:
-        output = html_document(render(snapshot, title=args.title, live=False))
+        output = html_document(render(
+            snapshot, title=args.title, live=False, bridge=args.bridge,
+            view_prefs=load_view_prefs(store.path),
+        ))
     if args.out == '-':
         print(output)
         return 0
@@ -712,6 +715,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument('--all', action='store_true', help='含已归档项目')
     sp.add_argument('--show-paths', action='store_true',
                     help='保留本机数据库和仓库绝对路径(默认脱敏)')
+    sp.add_argument('--bridge', action='store_true',
+                    help='macOS App 专用:状态 chip 可点击,经原生桥写库')
     add_project_flag(sp)
     sp.set_defaults(func=cmd_export)
 

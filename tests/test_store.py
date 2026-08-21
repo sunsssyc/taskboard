@@ -1,6 +1,8 @@
 import pytest
 
-from taskboard.store import BoardError, Store
+from taskboard.store import (
+    BoardError, Store, load_view_prefs, save_view_prefs, view_prefs_path,
+)
 
 
 @pytest.fixture()
@@ -117,3 +119,22 @@ def test_archived_projects_hidden_by_default(store):
     store.update_project('demo', archived=1)
     assert store.snapshot()['projects'] == []
     assert len(store.snapshot(include_archived=True)['projects']) == 1
+
+
+def test_view_prefs_roundtrip_and_resilience(store, tmp_path):
+    db = tmp_path / 'board.db'
+    assert load_view_prefs(db) == {}  # sidecar 不存在
+    assert view_prefs_path(db).name == 'board.view.json'
+
+    saved = save_view_prefs(db, {'order': ['b', 'a'], 'pinned': ['a'], 'junk': ['x']})
+    assert saved == {'order': ['b', 'a'], 'pinned': ['a']}  # 未知键丢弃
+    assert load_view_prefs(db) == {'order': ['b', 'a'], 'pinned': ['a']}
+
+    saved = save_view_prefs(db, {'order': ['ok', 1, '', None], 'pinned': 'notalist'})
+    assert saved == {'order': ['ok'], 'pinned': []}  # 非法条目过滤
+    assert load_view_prefs(db) == saved
+
+    view_prefs_path(db).write_text('{oops', encoding='utf-8')
+    assert load_view_prefs(db) == {}  # 损坏 JSON 容错
+    view_prefs_path(db).write_text('[1, 2]', encoding='utf-8')
+    assert load_view_prefs(db) == {}  # 顶层非对象容错

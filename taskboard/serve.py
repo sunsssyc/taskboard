@@ -193,6 +193,7 @@ def make_handler(db_path: str, title: str, include_archived: bool, dev: bool = F
                 body = render_module.render(
                     self._snapshot(), title=title, live=True,
                     csrf_token=token, write_enabled=write_enabled,
+                    view_prefs=store_module.load_view_prefs(db_path),
                 )
                 self._send(render_module.html_document(body).encode('utf-8'),
                            'text/html; charset=utf-8')
@@ -224,6 +225,10 @@ def make_handler(db_path: str, title: str, include_archived: bool, dev: bool = F
             path = unquote(urlsplit(self.path).path).rstrip('/') or '/'
             store = self._store()
             try:
+                if path == '/api/view':
+                    saved = store_module.save_view_prefs(db_path, data)
+                    self._json({'ok': True, 'view': saved})
+                    return
                 if path == '/api/tasks':
                     project = self._required_text(data, 'project', 120)
                     title_value = self._required_text(data, 'title')

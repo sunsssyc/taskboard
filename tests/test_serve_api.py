@@ -181,3 +181,37 @@ def test_done_records_head_from_target_project_repo(tmp_path):
     store.close()
     status_event = next(event for event in events if event['action'] == 'status_changed')
     assert json.loads(status_event['payload'])['commit'] == expected
+
+
+def test_view_prefs_api_roundtrip_and_page_embedding(tmp_path):
+    db_path = tmp_path / 'view.db'
+    store = Store(db_path)
+    store.create_project('demo', '视图偏好')
+    store.create_project('other', '另一个')
+    store.close()
+
+    with running_server(db_path) as port:
+        status, _, page = request(port, 'GET', '/')
+        assert status == 200
+        assert 'window.__BOARD_VIEW__ = {' not in page  # 偏好文件不存在时不嵌入
+        assert 'data-write="1"' in page
+
+        payload = json.dumps({'order': ['other', 'demo'], 'pinned': ['demo'], 'extra': ['x']})
+        status, _, value = request(port, 'POST', '/api/view', payload, write_headers(port))
+        assert status == 200
+        assert value['view'] == {'order': ['other', 'demo'], 'pinned': ['demo']}
+
+        status, _, _ = request(port, 'POST', '/api/view', payload, {
+            'Origin': f'http://127.0.0.1:{port}', 'Content-Type': 'application/json',
+        })
+        assert status == 403  # 缺 CSRF
+
+        status, _, page = request(port, 'GET', '/')
+        assert status == 200
+        assert 'window.__BOARD_VIEW__ = {"order": ["other", "demo"], "pinned": ["demo"]};' in page
+
+    with running_server(db_path, write_enabled=False) as port:
+        status, _, page = request(port, 'GET', '/')
+        assert status == 200 and 'data-write="1"' not in page
+        status, _, _ = request(port, 'POST', '/api/view', payload, write_headers(port))
+        assert status == 403  # 非本机监听只读

@@ -2,6 +2,84 @@ import AppKit
 import TaskboardAppCore
 import WebKit
 
+/// 接收页面里拖动排序/置顶的偏好变更,落盘到库旁的 *.view.json。
+/// 独立小对象持有回调,避免 userContentController 与窗口控制器互相持有。
+private final class ViewPrefsMessageHandler: NSObject, WKScriptMessageHandler {
+    private let prefsURL: URL
+
+    init(prefsURL: URL) {
+        self.prefsURL = prefsURL
+    }
+
+    func userContentController(_ userContentController: WKUserContentController,
+                               didReceive message: WKScriptMessage) {
+        guard let body = message.body as? [String: Any] else { return }
+        var prefs: [String: [String]] = [:]
+        for key in ["order", "pinned"] {
+            if let list = body[key] as? [String] {
+                prefs[key] = list.map { String($0.prefix(200)) }
+            }
+        }
+        guard prefs.count == 2 else { return }
+        guard let data = try? JSONSerialization.data(
+            withJSONObject: prefs, options: [.prettyPrinted, .sortedKeys]
+        ) else { return }
+        try? data.write(to: prefsURL, options: .atomic)
+    }
+}
+
+/// 接收页面里状态 chip 的变更请求,经 board CLI 写库。
+/// 成功后库版本号变化,BoardDatabaseMonitor 会在 1 秒内触发重新导出,页面自动刷新。
+private final class StatusMessageHandler: NSObject, WKScriptMessageHandler {
+    private static let commands = ["todo": "todo", "active": "start", "waiting": "wait", "done": "done"]
+    private let executableURL: URL
+    private let databaseURL: URL
+
+    init(executableURL: URL, databaseURL: URL) {
+        self.executableURL = executableURL
+        self.databaseURL = databaseURL
+    }
+
+    func userContentController(_ userContentController: WKUserContentController,
+                               didReceive message: WKScriptMessage) {
+        guard let body = message.body as? [String: Any],
+              let project = body["project"] as? String, !project.isEmpty,
+              let ref = body["ref"] as? Int,
+              let status = body["status"] as? String,
+              let command = Self.commands[status] else { return }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            let errorPipe = Pipe()
+            process.executableURL = self.executableURL
+            process.arguments = ["--db", self.databaseURL.path, command, String(ref), "-p", project]
+            process.standardError = errorPipe
+            do {
+                try process.run()
+            } catch {
+                self.report("无法启动 board:\n\(error.localizedDescription)")
+                return
+            }
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else {
+                let detail = String(
+                    data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8
+                ) ?? ""
+                self.report("修改状态失败(退出码 \(process.terminationStatus)):\n\(detail)")
+                return
+            }
+        }
+    }
+
+    private func report(_ message: String) {
+        DispatchQueue.main.async {
+            let alert = NSAlert()
+            alert.messageText = message
+            alert.alertStyle = .warning
+            alert.runModal()
+        }
+    }
+}
+
 final class BoardWindowController: NSWindowController, NSWindowDelegate, WKNavigationDelegate {
     private let configuration: BoardConfiguration
     private let exporter: BoardExporter
@@ -16,7 +94,17 @@ final class BoardWindowController: NSWindowController, NSWindowDelegate, WKNavig
         self.configuration = configuration
         exporter = BoardExporter(configuration: configuration)
         monitor = BoardDatabaseMonitor(databaseURL: configuration.databaseURL)
-        webView = WKWebView(frame: .zero)
+        let webConfiguration = WKWebViewConfiguration()
+        webConfiguration.userContentController.add(
+            ViewPrefsMessageHandler(prefsURL: configuration.viewPrefsURL), name: "boardView"
+        )
+        webConfiguration.userContentController.add(
+            StatusMessageHandler(
+                executableURL: configuration.executableURL,
+                databaseURL: configuration.databaseURL
+            ), name: "boardStatus"
+        )
+        webView = WKWebView(frame: .zero, configuration: webConfiguration)
 
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1180, height: 780),
@@ -33,6 +121,7 @@ final class BoardWindowController: NSWindowController, NSWindowDelegate, WKNavig
         super.init(window: window)
         window.delegate = self
         webView.navigationDelegate = self
+        webView.uiDelegate = self
     }
 
     @available(*, unavailable)
@@ -154,5 +243,30 @@ final class BoardWindowController: NSWindowController, NSWindowDelegate, WKNavig
             return
         }
         decisionHandler(.allow)
+    }
+}
+
+/// WKWebView 默认不实现 JS alert/confirm 面板(confirm 会直接返回 false),
+/// 状态改为“已完成”前的确认框依赖这里。
+extension BoardWindowController: WKUIDelegate {
+    func webView(_ webView: WKWebView,
+                 runJavaScriptAlertPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping () -> Void) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.runModal()
+        completionHandler()
+    }
+
+    func webView(_ webView: WKWebView,
+                 runJavaScriptConfirmPanelWithMessage message: String,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping (Bool) -> Void) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.addButton(withTitle: "确认")
+        alert.addButton(withTitle: "取消")
+        completionHandler(alert.runModal() == .alertFirstButtonReturn)
     }
 }

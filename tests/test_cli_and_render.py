@@ -142,6 +142,8 @@ def test_render_uses_xcode_style_light_workspace(tmp_path):
     assert '<main class="content">' in html
     assert 'prefers-color-scheme: dark' not in html
     assert 'background:var(--ground)' in html
+    assert '.done-fold summary, .active-fold summary, .blocked-fold summary, .dropped-fold summary {' in html
+    assert 'grid-template-columns:48px minmax(0,1fr); align-items:center' in html
 
 
 def test_render_marks_gate_and_blocking(tmp_path):
@@ -152,7 +154,9 @@ def test_render_marks_gate_and_blocking(tmp_path):
     html = render(store.snapshot())
     store.close()
     assert '闸门</span>' in html
-    assert '阻塞于' in html and '阻塞 →' in html
+    assert '阻塞 →' in html  # 主任务仍展示它会阻塞谁
+    assert '<details class="blocked-fold">' in html
+    assert '<summary>还有 1 项被阻塞待办</summary>' in html
 
 
 def test_render_long_notes_use_full_width_reading_layout(tmp_path):
@@ -167,7 +171,7 @@ def test_render_long_notes_use_full_width_reading_layout(tmp_path):
     assert 'class="note finding long" id="note-2"' in html
     assert 'grid-column:1/-1' in html
     assert 'grid-template-columns:minmax(240px,.75fr) minmax(0,1.8fr)' in html
-    assert 'grid-template-columns:38px minmax(0,1fr)' in html
+    assert 'grid-template-columns:48px minmax(0,1fr)' in html
     assert '.notes { display:flex; flex-direction:column' in html
     assert 'overflow-wrap:anywhere' in html
     assert '@media (max-width:760px)' in html
@@ -244,6 +248,12 @@ def test_task_and_note_fields_render_markdown(tmp_path):
     assert 'class="markdown card-detail"' in html
     assert '<strong>影响</strong>' in html and '<li>补测试</li>' in html
     assert '<div class="accept"><b>验收</b>运行 <code>pytest</code></div>' in html
+    # 主任务默认完整展开,正文开关收进节点序号旁的 disclosure,不再使用底部按钮。
+    assert '<div class="task-body"><div class="markdown card-detail"' in html
+    assert 'class="task-disclosure" aria-expanded="true"' in html
+    assert 'aria-label="收起 #1 全文"' in html
+    assert 'body.hidden = !expanded' in html
+    assert '展开全部' not in html
     assert 'class="markdown note-body"' in html
     assert '<blockquote><p>已验证</p></blockquote>' in html
     assert '<a href="docs/check.md">文档</a>' in html
@@ -310,3 +320,68 @@ def test_note_commands_reject_literal_paragraph_breaks(db, capsys, command):
         assert store.notes('demo') == []
     finally:
         store.close()
+
+
+def test_render_embeds_view_prefs_with_script_escape(db):
+    store = Store(db)
+    store.create_project('demo', '嵌入偏好')
+    snapshot = store.snapshot()
+    store.close()
+
+    page = render(snapshot, view_prefs={'order': ['demo'], 'pinned': []})
+    assert 'window.__BOARD_VIEW__ = {"order": ["demo"], "pinned": []};' in page
+
+    hostile = render(snapshot, view_prefs={'order': ['x</script><script>alert(1)'], 'pinned': []})
+    assert '<\\/script>' in hostile
+    assert 'x</script>' not in hostile
+
+    bare = render(snapshot)
+    assert 'window.__BOARD_VIEW__ = {' not in bare
+
+
+def test_cli_export_embeds_view_prefs(db, tmp_path, capsys):
+    from taskboard.store import save_view_prefs
+
+    assert run(db, 'init', 'demo', '--name', '导出嵌入') == 0
+    save_view_prefs(db, {'order': ['demo'], 'pinned': ['demo']})
+    out = tmp_path / 'board.html'
+    assert run(db, 'export', '--out', str(out)) == 0
+    capsys.readouterr()
+
+    page = out.read_text(encoding='utf-8')
+    assert 'window.__BOARD_VIEW__ = {"order": ["demo"], "pinned": ["demo"]};' in page
+
+
+def test_render_bridge_mode_clicks_status_via_native_bridge(db):
+    store = Store(db)
+    store.create_project('demo', '桥接模式')
+    store.add_task('demo', '可点状态', accept='通过验收')
+    snapshot = store.snapshot()
+    store.close()
+
+    page = render(snapshot, bridge=True)
+    assert 'class="chip todo status-button"' in page
+    assert 'id="status-menu"' in page
+    assert 'window.__boardSetStatus' in page
+    assert 'handlers.boardStatus.postMessage' in page
+    assert 'data-csrf' not in page  # 桥接模式没有 serve 的写入 API
+    assert 'class="detail-button"' not in page  # 详情依赖 /api,桥接导出不含
+
+    plain = render(snapshot)
+    assert 'status-button' not in plain
+    assert 'id="status-menu"' not in plain
+
+
+def test_cli_export_bridge_flag(db, tmp_path, capsys):
+    assert run(db, 'init', 'demo', '--name', '桥接导出') == 0
+    assert run(db, 'add', '点我改状态', '-p', 'demo') == 0
+    capsys.readouterr()
+
+    out = tmp_path / 'bridge.html'
+    assert run(db, 'export', '--bridge', '--out', str(out)) == 0
+    page = out.read_text(encoding='utf-8')
+    assert 'status-button' in page and 'handlers.boardStatus.postMessage' in page
+
+    plain_out = tmp_path / 'plain.html'
+    assert run(db, 'export', '--out', str(plain_out)) == 0
+    assert 'status-button' not in plain_out.read_text(encoding='utf-8')

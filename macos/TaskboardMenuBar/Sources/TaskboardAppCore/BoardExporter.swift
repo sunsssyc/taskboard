@@ -49,7 +49,7 @@ public final class BoardExporter {
         process.executableURL = configuration.executableURL
         process.arguments = [
             "--db", configuration.databaseURL.path,
-            "export", "--show-paths", "--out", temporaryURL.path,
+            "export", "--show-paths", "--bridge", "--out", temporaryURL.path,
         ]
         process.standardOutput = outputPipe
         process.standardError = errorPipe

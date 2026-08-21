@@ -22,6 +22,11 @@ public struct BoardConfiguration: Equatable {
         self.cacheDirectoryURL = cacheDirectoryURL
     }
 
+    /// 侧边栏视图偏好(排序/置顶)的 sidecar 路径,与 Python 端 view_prefs_path 一致。
+    public var viewPrefsURL: URL {
+        databaseURL.deletingPathExtension().appendingPathExtension("view.json")
+    }
+
     public static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,

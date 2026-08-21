@@ -44,6 +44,46 @@ def default_db() -> Path:
     return home_dir() / 'board.db'
 
 
+# 侧边栏视图偏好(项目排序/置顶)。放 sidecar JSON 而非库内:
+# 改动不会推高库版本号,macOS App 的库监听就不会因此触发整页重载。
+VIEW_PREF_KEYS = ('order', 'pinned')
+VIEW_PREF_MAX_ITEMS = 500
+
+
+def view_prefs_path(db_path: str | Path) -> Path:
+    path = Path(db_path)
+    return path.with_name(path.stem + '.view.json')
+
+
+def _clean_pref_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [
+        item[:200] for item in value[:VIEW_PREF_MAX_ITEMS]
+        if isinstance(item, str) and item and '\x00' not in item
+    ]
+
+
+def load_view_prefs(db_path: str | Path) -> dict:
+    """读取视图偏好;文件缺失或损坏时返回空 dict,两个键始终在文件有效时齐全。"""
+    try:
+        raw = json.loads(view_prefs_path(db_path).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {key: _clean_pref_list(raw.get(key)) for key in VIEW_PREF_KEYS}
+
+
+def save_view_prefs(db_path: str | Path, prefs: dict) -> dict:
+    """校验后持久化视图偏好,返回实际落盘内容(未知键丢弃,非法列表清空)。"""
+    cleaned = {key: _clean_pref_list(prefs.get(key)) for key in VIEW_PREF_KEYS}
+    view_prefs_path(db_path).write_text(
+        json.dumps(cleaned, ensure_ascii=False, indent=1) + '\n', encoding='utf-8',
+    )
+    return cleaned
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec='seconds')
 

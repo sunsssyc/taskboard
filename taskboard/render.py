@@ -115,6 +115,59 @@ button.action:focus-visible { outline:0; box-shadow:var(--ring); }
 .pcard.all-projects { min-height:34px; justify-content:center; margin-bottom:4px; }
 .pcard.all-projects h3 { font-size:12.5px; }
 .pcard.all-projects .key { order:0; }
+/* 侧边栏项目卡:拖动排序 + 置顶按钮(偏好存 localStorage,不写库) */
+.pin-button { position:absolute; top:6px; right:6px; display:grid; place-items:center;
+  width:20px; height:20px; border:0; border-radius:6px; background:transparent;
+  color:var(--ink-faint); cursor:pointer; opacity:0; transition:opacity .15s ease, background .15s ease; }
+.pcard:hover .pin-button, .pin-button:focus-visible { opacity:1; }
+.pin-button:hover { background:rgba(0,0,0,.07); color:var(--ink); }
+.pcard.pinned .pin-button { opacity:1; color:var(--accent); }
+.pcard[aria-pressed="true"] .pin-button { color:rgba(255,255,255,.75); }
+.pcard[aria-pressed="true"] .pin-button:hover { background:rgba(255,255,255,.2); color:#fff; }
+.pcard[aria-pressed="true"].pinned .pin-button { color:#fff; }
+.pcard.dragging { opacity:.45; }
+/* 侧边栏大纲:项目卡下挂当前要动的任务行,点击定位到右侧卡片 */
+.pgroup { border-radius:var(--radius-md); }
+.pgroup[data-selected] { background:var(--accent); box-shadow:0 4px 14px rgba(0,113,227,.3); }
+.ptasks { display:flex; flex-direction:column; padding:0 4px 5px; }
+.ptask { display:flex; align-items:center; gap:6px; padding:3px 8px 3px 14px; border:0;
+  background:none; font:inherit; font-size:12px; color:var(--ink-muted); cursor:pointer;
+  border-radius:6px; text-align:left; min-width:0; }
+.ptask:hover { background:rgba(0,0,0,.05); color:var(--ink); }
+.ptask:focus-visible { outline:0; box-shadow:var(--ring); }
+.ptask .ref { font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); flex:none; }
+.ptask .ptitle { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ptask .dot { width:6px; height:6px; border-radius:50%; flex:none; }
+.ptask .dot.active { background:var(--active); }
+.ptask .dot.waiting { background:transparent; box-shadow:inset 0 0 0 1.5px var(--active); }
+.ptask .dot.todo { background:var(--wait); }
+.ptask.more { color:var(--ink-faint); font-size:11px; padding-left:26px; }
+.ptask[aria-current="true"] { background:rgba(0,0,0,.06); color:var(--ink); font-weight:500; }
+.pgroup[data-selected] .ptask { color:rgba(255,255,255,.88); }
+.pgroup[data-selected] .ptask:hover { background:rgba(255,255,255,.14); color:#fff; }
+.pgroup[data-selected] .ptask .ref { color:rgba(255,255,255,.62); }
+.pgroup[data-selected] .ptask .dot.active { background:#fff; }
+.pgroup[data-selected] .ptask .dot.waiting { box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.85); }
+.pgroup[data-selected] .ptask .dot.todo { background:rgba(255,255,255,.55); }
+.pgroup[data-selected] .ptask.more { color:rgba(255,255,255,.62); }
+.pgroup[data-selected] .ptask[aria-current="true"] { background:rgba(255,255,255,.18); color:#fff; }
+/* 从大纲定位卡片时闪烁一下底色,给眼睛一个落点 */
+@keyframes step-flash { 0%,35% { background:var(--accent-soft); } 100% { background:transparent; } }
+.step.flash { animation:step-flash 1.2s ease-out; }
+/* live 可写时状态 chip 是按钮,点击弹出状态菜单 */
+button.chip { appearance:none; -webkit-appearance:none; cursor:pointer; }
+button.chip:focus-visible { outline:0; box-shadow:var(--ring); }
+.status-menu { position:fixed; z-index:20; min-width:136px; padding:5px; background:var(--surface);
+  border:1px solid var(--rule); border-radius:10px;
+  box-shadow:0 4px 24px rgba(0,0,0,.14),0 1px 4px rgba(0,0,0,.08);
+  display:flex; flex-direction:column; }
+.status-menu[hidden] { display:none; }
+.status-menu button { display:flex; align-items:center; border:0; background:none; font:inherit;
+  font-size:13px; text-align:left; padding:5px 9px; border-radius:6px; cursor:pointer; color:var(--ink); }
+.status-menu button::before { content:''; width:14px; flex:none; font-size:11px; }
+.status-menu button.current::before { content:'✓'; }
+.status-menu button:hover { background:var(--accent); color:#fff; }
+.status-menu button:focus-visible { outline:0; box-shadow:var(--ring); }
 .filter-note { display:none; align-items:center; gap:10px; font-size:12px; color:var(--ink-faint); }
 .filter-note[data-on] { display:flex; }
 .filter-note button { font:inherit; color:var(--accent); background:none; border:0;
@@ -152,14 +205,24 @@ section[hidden] { display:none; }
 .spine { display:flex; flex-direction:column; min-width:0; overflow:hidden; background:var(--surface);
   border:1px solid var(--rule); border-radius:var(--radius-lg);
   box-shadow:0 1px 2px rgba(0,0,0,.04); }
-.step { display:grid; grid-template-columns:38px minmax(0,1fr); gap:0; position:relative;
+.step { display:grid; grid-template-columns:48px minmax(0,1fr); gap:0; position:relative;
         min-width:0; padding:0; border-bottom:1px solid var(--rule-soft); }
 .step:last-child { border-bottom:0; }
 .step[hidden], [data-filter-item][hidden] { display:none; }
 .step::before { display:none; }
-.node { width:38px; min-height:42px; display:grid; place-items:start center; padding-top:13px;
+.node { width:48px; min-height:42px; display:grid; place-items:start center; padding-top:10px;
         font-family:var(--mono); font-size:10.5px; font-variant-numeric:tabular-nums;
         background:transparent; border:0; color:var(--ink-faint); }
+.task-disclosure { min-width:38px; min-height:24px; padding:0 3px; display:flex; align-items:center;
+  justify-content:center; gap:5px; border:0; border-radius:4px; background:none; color:inherit;
+  font:inherit; cursor:pointer; }
+.task-disclosure::before { content:''; width:6px; height:6px; flex:0 0 6px;
+  border-right:1.6px solid currentColor; border-bottom:1.6px solid currentColor;
+  transform:rotate(-45deg); transition:transform .15s ease; }
+.task-disclosure[aria-expanded="true"]::before { transform:rotate(45deg); }
+.task-disclosure:hover { color:var(--accent); background:rgba(0,122,255,.08); }
+.task-disclosure:focus-visible { outline:0; box-shadow:var(--ring); }
+@media (prefers-reduced-motion: reduce) { .task-disclosure::before { transition:none; } }
 .step[data-status="done"] .node { background:transparent; color:var(--done); }
 .step[data-status="active"] .node { background:transparent; color:var(--accent); font-weight:700; }
 .step[data-status="dropped"] .node { color:var(--ink-faint); opacity:.6; }
@@ -192,6 +255,7 @@ section[hidden] { display:none; }
           padding-left:9px; }
 .accept b { font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; color:var(--accent);
             text-transform:uppercase; margin-right:6px; }
+.task-body[hidden] { display:none; }
 /* 折叠箭头统一为 macOS 式 chevron:右向闭合,展开旋转 90° 向下 */
 summary { list-style:none; }
 summary::-webkit-details-marker { display:none; }
@@ -202,9 +266,25 @@ details[open] > summary::before { transform:rotate(45deg); }
 @media (prefers-reduced-motion: reduce) { summary::before { transition:none; } }
 .done-fold { margin-top:0; border-top:1px solid var(--rule-soft); }
 .done-fold summary { cursor:pointer; font-family:var(--mono); font-size:11.5px; color:var(--ink-faint);
-                     padding:7px 10px 7px 38px; background:var(--chrome); }
+                     background:var(--chrome); }
 .done-fold summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 .done-fold[open] summary { color:var(--ink-muted); }
+.active-fold { border-top:1px solid var(--rule-soft); }
+.active-fold summary { cursor:pointer; font-size:12px;
+  color:var(--active); background:var(--active-soft); overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; }
+.active-fold summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.blocked-fold, .dropped-fold { border-top:1px solid var(--rule-soft); }
+.blocked-fold summary, .dropped-fold summary { cursor:pointer;
+  font-size:12px; color:var(--ink-muted); background:var(--chrome); }
+.blocked-fold summary:focus-visible, .dropped-fold summary:focus-visible {
+  outline:2px solid var(--accent); outline-offset:3px; }
+.done-fold summary, .active-fold summary, .blocked-fold summary, .dropped-fold summary {
+  min-height:40px; padding:7px 12px 7px 0; display:grid;
+  grid-template-columns:48px minmax(0,1fr); align-items:center; }
+.done-fold summary::before, .active-fold summary::before,
+.blocked-fold summary::before, .dropped-fold summary::before {
+  grid-column:1; justify-self:center; margin:0; }
 .chip.dropped { background:var(--wait-soft); color:var(--ink-faint); }
 .chip.gate { background:var(--alert-soft); color:var(--alert); }
 .chip.who { background:var(--accent-soft); color:var(--accent); }
@@ -354,10 +434,13 @@ dialog::backdrop { background:rgba(0,0,0,.07); backdrop-filter:none; }
   .overview::-webkit-scrollbar { display:none; }
   .pcard { flex:0 0 210px; scroll-snap-align:start; background:var(--surface); border:1px solid var(--rule); }
   .pcard[aria-pressed="true"] { border-color:var(--accent); }
+  .ptasks { display:none; }
   .content { padding:18px 12px 48px; gap:24px; }
   .sec-head .key { flex-basis:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .step { grid-template-columns:32px minmax(0,1fr); }
-  .node { width:32px; }
+  .step { grid-template-columns:42px minmax(0,1fr); }
+  .node { width:42px; }
+  .done-fold summary, .active-fold summary, .blocked-fold summary, .dropped-fold summary {
+    grid-template-columns:42px minmax(0,1fr); }
   dialog { inset:0; width:auto; }
   .detail-grid, .form-row { grid-template-columns:1fr; }
   .event { grid-template-columns:1fr; gap:2px; }
@@ -379,6 +462,27 @@ FILTER_SCRIPT = """
   var empty = document.querySelector('.filter-empty');
   var selectedProject = null;
   var canSwitchProject = cards.length >= 2; // “全部项目”之外至少还有一个项目
+  var taskDisclosures = Array.prototype.slice.call(document.querySelectorAll('.task-disclosure'));
+
+  function setTaskExpanded(button, expanded) {
+    var step = button.closest('.step');
+    var body = step && step.querySelector('.task-body');
+    if (!body) return;
+    body.hidden = !expanded;
+    button.setAttribute('aria-expanded', String(expanded));
+    button.setAttribute('aria-label', (expanded ? '收起 #' : '展开 #') + step.dataset.ref + ' 全文');
+  }
+
+  function expandStepBody(step) {
+    var button = step && step.querySelector('.task-disclosure');
+    if (button) setTaskExpanded(button, true);
+  }
+
+  taskDisclosures.forEach(function (button) {
+    button.addEventListener('click', function () {
+      setTaskExpanded(button, button.getAttribute('aria-expanded') !== 'true');
+    });
+  });
 
   // 搜索高亮:先拆掉旧的 <mark>,再在仍可见的条目里包裹新匹配。
   // 逐文本节点处理,不碰 innerHTML,避免破坏已渲染的 code/strong/a 标签。
@@ -437,6 +541,10 @@ FILTER_SCRIPT = """
         ? card.dataset.project === selectedProject
         : card.dataset.project === '';
       card.setAttribute('aria-pressed', String(selected));
+      var group = card.parentNode;
+      if (group && group.classList && group.classList.contains('pgroup')) {
+        group.toggleAttribute('data-selected', selected);
+      }
     });
     var visibleItems = 0;
     sections.forEach(function (section) {
@@ -457,9 +565,11 @@ FILTER_SCRIPT = """
       });
       section.hidden = !projectMatches || (sectionItems.length > 0 && sectionVisible === 0);
       visibleItems += sectionVisible;
-      var doneFold = section.querySelector('.done-fold');
-      if (doneFold && (needle || statusValue === 'done')) {
-        doneFold.open = Boolean(doneFold.querySelector('.step:not([hidden])'));
+      var revealFoldedTasks = Boolean(needle || statusValue !== 'all' || ownerValue !== 'all');
+      if (revealFoldedTasks) {
+        section.querySelectorAll('.active-fold, .done-fold, .blocked-fold, .dropped-fold').forEach(function (fold) {
+          fold.open = Boolean(fold.querySelector('.step:not([hidden])'));
+        });
       }
       section.querySelectorAll('.note-group').forEach(function (group) {
         group.hidden = !group.querySelector('[data-filter-item]:not([hidden])');
@@ -480,7 +590,19 @@ FILTER_SCRIPT = """
     }
     var hasFilter = Boolean(selectedProject || needle || statusValue !== 'all' || ownerValue !== 'all');
     if (empty) empty.toggleAttribute('data-on', hasFilter && visibleItems === 0);
+    if (needle) {
+      sections.forEach(function (section) {
+        if (section.hidden) return;
+        section.querySelectorAll('.step:not([hidden])').forEach(expandStepBody);
+      });
+    }
     highlightVisible(needle);
+  }
+
+  function clearTaskCurrent() {
+    overview.querySelectorAll('.ptask[aria-current]').forEach(function (row) {
+      row.removeAttribute('aria-current');
+    });
   }
 
   cards.forEach(function (card) {
@@ -488,12 +610,39 @@ FILTER_SCRIPT = """
     card.addEventListener('click', function () {
       var already = card.getAttribute('aria-pressed') === 'true';
       selectedProject = already ? null : (card.dataset.project || null);
+      clearTaskCurrent();
       apply();
     });
   });
   note.querySelector('button').addEventListener('click', function () {
     selectedProject = null;
+    clearTaskCurrent();
     apply();
+  });
+
+  // 大纲任务行:选中所属项目并滚动定位到右侧卡片,闪烁一下给出落点。
+  overview.querySelectorAll('.ptask').forEach(function (row) {
+    row.addEventListener('click', function () {
+      var key = row.dataset.project || null;
+      if (canSwitchProject && selectedProject !== key) {
+        selectedProject = key;
+        apply();
+      }
+      clearTaskCurrent();
+      row.setAttribute('aria-current', 'true');
+      var ref = row.dataset.ref;
+      if (!ref) return; // “还有 N 项”只负责选中项目
+      var step = document.querySelector(
+        'section[data-project="' + key + '"] .step[data-ref="' + ref + '"]');
+      if (!step) return;
+      var fold = step.closest('details'); // 目标可能收在“还有 N 项进行中”里
+      if (fold) fold.open = true;
+      expandStepBody(step);
+      step.scrollIntoView({block:'center', behavior:'smooth'});
+      step.classList.remove('flash');
+      void step.offsetWidth; // 重置动画,连点同一行也能再闪
+      step.classList.add('flash');
+    });
   });
   [query, status, owner].forEach(function (control) {
     if (control) control.addEventListener(control === query ? 'input' : 'change', apply);
@@ -504,6 +653,127 @@ FILTER_SCRIPT = """
       if (group) group.open = true;
     });
   });
+
+  // 侧边栏项目卡:拖动排序与置顶。偏好的唯一事实源是库旁的 *.view.json,
+  // 由导出/serve 在渲染时嵌入本页;localStorage 只是无写入通道时的降级缓存。
+  var ORDER_KEY = 'taskboard:order';
+  var PIN_KEY = 'taskboard:pinned';
+  var embeddedView = (window.__BOARD_VIEW__ && typeof window.__BOARD_VIEW__ === 'object')
+    ? window.__BOARD_VIEW__ : {};
+
+  function prefField(key) { return key === ORDER_KEY ? 'order' : 'pinned'; }
+
+  function validList(value) {
+    if (!Array.isArray(value)) return [];
+    return value.filter(function (item) { return typeof item === 'string'; });
+  }
+
+  function readList(key) {
+    var field = prefField(key);
+    if (Object.prototype.hasOwnProperty.call(embeddedView, field)) return validList(embeddedView[field]);
+    try {
+      return validList(JSON.parse(localStorage.getItem(key) || '[]'));
+    } catch (error) { return []; }
+  }
+  function writeList(key, value) {
+    embeddedView[prefField(key)] = value;
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (error) { /* 隐私模式等场景静默 */ }
+    persistView();
+  }
+
+  function persistView() {
+    var payload = {order: readList(ORDER_KEY), pinned: readList(PIN_KEY)};
+    var handlers = window.webkit && window.webkit.messageHandlers;
+    if (handlers && handlers.boardView) { // macOS 菜单栏 App:原生桥直接落盘
+      try { handlers.boardView.postMessage(payload); return; } catch (error) { /* 落到 serve 通道 */ }
+    }
+    var root = document.querySelector('.wrap[data-write]'); // board serve 本机可写
+    if (root && root.dataset.csrf) {
+      fetch('/api/view', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-Taskboard-CSRF': root.dataset.csrf},
+        body: JSON.stringify(payload)
+      }).catch(function () { /* 已降级 localStorage,下次写入再补 */ });
+    }
+  }
+
+  function sortableGroups() {
+    return Array.prototype.slice.call(overview.querySelectorAll('.pgroup[data-project]'));
+  }
+
+  function applySidebarPrefs() {
+    var order = readList(ORDER_KEY);
+    var pinned = readList(PIN_KEY);
+    var items = sortableGroups();
+    var rank = {};
+    order.forEach(function (key, index) { rank[key] = index; });
+    var fallback = order.length;
+    items.sort(function (a, b) {
+      var aPinned = pinned.indexOf(a.dataset.project) !== -1;
+      var bPinned = pinned.indexOf(b.dataset.project) !== -1;
+      if (aPinned !== bPinned) return aPinned ? -1 : 1;
+      var aRank = Object.prototype.hasOwnProperty.call(rank, a.dataset.project) ? rank[a.dataset.project] : fallback + items.indexOf(a);
+      var bRank = Object.prototype.hasOwnProperty.call(rank, b.dataset.project) ? rank[b.dataset.project] : fallback + items.indexOf(b);
+      return aRank - bRank;
+    });
+    items.forEach(function (group) {
+      overview.appendChild(group);
+      var card = group.querySelector('.pcard');
+      if (card) card.classList.toggle('pinned', pinned.indexOf(group.dataset.project) !== -1);
+    });
+  }
+
+  function rememberOrder() {
+    writeList(ORDER_KEY, sortableGroups().map(function (group) { return group.dataset.project; }));
+  }
+
+  if (sortableGroups().length >= 2) {
+    sortableGroups().forEach(function (group) {
+      var card = group.querySelector('.pcard');
+      if (!card) return;
+      card.draggable = true;
+      var pin = document.createElement('button');
+      pin.type = 'button';
+      pin.className = 'pin-button';
+      pin.title = '置顶';
+      pin.setAttribute('aria-label', '置顶 ' + group.dataset.project);
+      pin.innerHTML = '<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><g transform="rotate(45 6 6)" fill="currentColor"><circle cx="6" cy="3.1" r="1.8"/><rect x="5.3" y="4.2" width="1.4" height="5.6" rx=".7"/></g></svg>';
+      pin.addEventListener('click', function (event) {
+        event.stopPropagation();
+        var pinned = readList(PIN_KEY);
+        var key = group.dataset.project;
+        var at = pinned.indexOf(key);
+        if (at === -1) pinned.push(key); else pinned.splice(at, 1);
+        writeList(PIN_KEY, pinned);
+        applySidebarPrefs();
+      });
+      card.appendChild(pin);
+
+      card.addEventListener('dragstart', function (event) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', group.dataset.project);
+        card.classList.add('dragging');
+      });
+      card.addEventListener('dragend', function () {
+        card.classList.remove('dragging');
+      });
+      // 拖动目标是整个大纲组:悬停在任务行上也要能落位
+      group.addEventListener('dragover', function (event) {
+        event.preventDefault();
+        var dragging = overview.querySelector('.dragging');
+        if (!dragging || dragging.parentNode === group) return;
+        var rect = group.getBoundingClientRect();
+        if (event.clientY < rect.top + rect.height / 2) overview.insertBefore(dragging.parentNode, group);
+        else overview.insertBefore(dragging.parentNode, group.nextSibling);
+      });
+      group.addEventListener('drop', function (event) {
+        event.preventDefault();
+        rememberOrder();
+        applySidebarPrefs(); // 拖动跨过置顶边界时重新分组
+      });
+    });
+  }
+  applySidebarPrefs();
   apply();
 })();
 </script>
@@ -525,6 +795,22 @@ INTERACTIVE_SCRIPT = """
   var createError = createDialog ? createDialog.querySelector('.form-error') : null;
   var categoryMap = createForm ? JSON.parse(createForm.dataset.categories || '{}') : {};
   var current = null;
+
+  async function setStatus(target, status) {
+    if (status === 'done') {
+      var accept = target.dataset.accept ? '\\n\\n验收条件：' + target.dataset.accept : '';
+      if (!confirm('确认将 #' + target.dataset.ref + ' 标记为已完成？' + accept)) return;
+    }
+    try {
+      await api('/api/tasks/' + encodeURIComponent(target.dataset.project) + '/' + target.dataset.ref + '/status', {
+        method: 'POST', body: JSON.stringify({status: status})
+      });
+      location.reload();
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+  window.__boardSetStatus = setStatus; // 状态菜单 UI 在 STATUS_MENU_SCRIPT,写库动作由这里提供
 
   function element(tag, className, text) {
     var node = document.createElement(tag);
@@ -679,6 +965,77 @@ INTERACTIVE_SCRIPT = """
     }
   });
   if (createForm) createForm.elements.project.addEventListener('change', updateCategoryOptions);
+})();
+</script>
+"""
+
+STATUS_MENU_SCRIPT = """
+<script>
+(function () {
+  // 状态菜单的纯 UI 交互;真正的写库动作由 window.__boardSetStatus 提供:
+  // board serve 在 INTERACTIVE_SCRIPT 里走 /api,macOS App 在 BRIDGE_STATUS_SCRIPT 里走原生桥。
+  var statusMenu = document.getElementById('status-menu');
+  if (!statusMenu || !window.__boardSetStatus) return;
+  var statusMenuTarget = null;
+
+  function closeStatusMenu() {
+    statusMenu.hidden = true;
+    statusMenuTarget = null;
+  }
+
+  function openStatusMenu(button) {
+    statusMenuTarget = button;
+    statusMenu.querySelectorAll('[data-status]').forEach(function (item) {
+      item.classList.toggle('current', item.dataset.status === button.dataset.status);
+    });
+    statusMenu.hidden = false;
+    var rect = button.getBoundingClientRect();
+    var left = Math.min(rect.left, window.innerWidth - statusMenu.offsetWidth - 8);
+    statusMenu.style.left = Math.max(8, left) + 'px';
+    statusMenu.style.top = (rect.bottom + 6) + 'px';
+  }
+
+  statusMenu.addEventListener('click', function (event) {
+    var item = event.target.closest('[data-status]');
+    if (!item || !statusMenuTarget) return;
+    var target = statusMenuTarget;
+    closeStatusMenu();
+    if (item.dataset.status !== target.dataset.status) window.__boardSetStatus(target, item.dataset.status);
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') closeStatusMenu();
+  });
+  window.addEventListener('resize', closeStatusMenu);
+  window.addEventListener('scroll', closeStatusMenu, true);
+  document.addEventListener('click', function (event) {
+    var statusButton = event.target.closest('.status-button');
+    if (statusButton) {
+      if (!statusMenu.hidden && statusMenuTarget === statusButton) closeStatusMenu();
+      else openStatusMenu(statusButton);
+      return;
+    }
+    if (!statusMenu.hidden && !event.target.closest('#status-menu')) closeStatusMenu();
+  });
+})();
+</script>
+"""
+
+BRIDGE_STATUS_SCRIPT = """
+<script>
+(function () {
+  // macOS 菜单栏 App:状态变更经原生桥写库。Swift 跑 board CLI 改库后,
+  // 库版本号变化会触发 App 自动重新导出,本页无需自行刷新。
+  var handlers = window.webkit && window.webkit.messageHandlers;
+  if (!handlers || !handlers.boardStatus) return;
+  window.__boardSetStatus = function (target, status) {
+    if (status === 'done') {
+      var accept = target.dataset.accept ? '\\n\\n验收条件：' + target.dataset.accept : '';
+      if (!confirm('确认将 #' + target.dataset.ref + ' 标记为已完成？' + accept)) return;
+    }
+    handlers.boardStatus.postMessage({
+      project: target.dataset.project, ref: Number(target.dataset.ref), status: status
+    });
+  };
 })();
 </script>
 """
@@ -897,8 +1254,46 @@ def _overview_card(project: dict) -> str:
       </button>"""
 
 
-def _task_card(task: dict, project: str, live: bool = False) -> str:
-    chips = [f'<span class="chip {task["status"]}">{STATUS_LABEL[task["status"]]}</span>']
+def _overview_group(project: dict) -> str:
+    # 侧边栏以项目为大纲节点:卡下挂“当前要动”的任务——进行中、等人工、可开工待办。
+    # 完成/已放弃/被阻塞的不进大纲,超出上限收成一行计数,保持侧边栏是速览而非清单。
+    rank = {'active': 0, 'waiting': 1, 'todo': 2}
+    focus = sorted(
+        (t for t in project['tasks']
+         if t['status'] in ('active', 'waiting') or (t['status'] == 'todo' and t['actionable'])),
+        key=lambda t: (rank[t['status']], t['ref']),
+    )
+    shown = focus[:7]
+    rest = len(focus) - len(shown)
+    rows = ''.join(
+        f'<button type="button" class="ptask" data-project="{esc(project["key"])}" '
+        f'data-ref="{t["ref"]}" title="{esc(t["title"])}"><i class="dot {t["status"]}"></i>'
+        f'<span class="ref">#{t["ref"]}</span><span class="ptitle">{esc(t["title"])}</span></button>'
+        for t in shown
+    )
+    if rest:
+        rows += (
+            f'<button type="button" class="ptask more" data-project="{esc(project["key"])}">'
+            f'还有 {rest} 项…</button>'
+        )
+    tasks_html = f'<div class="ptasks">{rows}</div>' if rows else ''
+    return (
+        f'<div class="pgroup" data-project="{esc(project["key"])}">'
+        f'{_overview_card(project)}{tasks_html}</div>'
+    )
+
+
+def _task_card(task: dict, project: str, live: bool = False,
+               status_button: bool = False, expanded: bool = False) -> str:
+    if status_button:
+        chips = [
+            f'<button type="button" class="chip {task["status"]} status-button" '
+            f'data-project="{esc(project)}" data-ref="{task["ref"]}" data-status="{task["status"]}" '
+            f'data-accept="{esc(task.get("accept") or "")}" title="点击修改状态">'
+            f'{STATUS_LABEL[task["status"]]}</button>'
+        ]
+    else:
+        chips = [f'<span class="chip {task["status"]}">{STATUS_LABEL[task["status"]]}</span>']
     if task['owner']:
         chips.append(f'<span class="chip who">{esc(task["owner"])}</span>')
     if task['gate'] and task['status'] != 'done':
@@ -926,6 +1321,16 @@ def _task_card(task: dict, project: str, live: bool = False) -> str:
         f'<div class="accept"><b>验收</b>{render_inline_markdown(task["accept"])}</div>'
         if task.get('accept') and task['status'] != 'done' else ''
     )
+    body_html = ''
+    disclosure = f'<span>{task["ref"]}</span>'
+    if detail_html or accept_html or dep_html:
+        hidden = '' if expanded else ' hidden'
+        body_html = f'<div class="task-body"{hidden}>{detail_html}{accept_html}{dep_html}</div>'
+        disclosure = (
+            f'<button type="button" class="task-disclosure" aria-expanded="{str(expanded).lower()}" '
+            f'aria-label="{("收起" if expanded else "展开")} #{task["ref"]} 全文">'
+            f'<span>{task["ref"]}</span></button>'
+        )
     search_text = ' '.join(str(task.get(field) or '') for field in (
         'ref', 'title', 'detail', 'accept', 'owner', 'branch', 'pr'
     )).casefold()
@@ -934,15 +1339,13 @@ def _task_card(task: dict, project: str, live: bool = False) -> str:
         f'data-ref="{task["ref"]}">详情</button>' if live else ''
     )
 
-    return f"""        <div class="step" data-filter-item data-status="{task['status']}" data-actionable="{str(bool(task['actionable'])).lower()}" data-owner="{esc(task.get('owner') or '')}" data-search="{esc(search_text)}">
-          <div class="node">{task['ref']}</div>
+    return f"""        <div class="step" data-filter-item data-ref="{task['ref']}" data-status="{task['status']}" data-actionable="{str(bool(task['actionable'])).lower()}" data-owner="{esc(task.get('owner') or '')}" data-search="{esc(search_text)}">
+          <div class="node">{disclosure}</div>
           <div class="card">
             <div class="card-top"><h3>{esc(task['title'])}</h3>{detail_button}{''.join(chips)}</div>
-            {detail_html}{accept_html}{dep_html}
+            {body_html}
           </div>
         </div>"""
-
-
 def _note_card(note: dict, kind: str) -> str:
     search_text = ' '.join(str(note.get(field) or '') for field in (
         'id', 'category', 'title', 'body', 'metric'
@@ -1031,14 +1434,96 @@ def _link_groups(notes: list[dict], project_key: str) -> str:
     return index_html + '<div class="note-groups">' + '\n'.join(groups) + '</div>'
 
 
-def _project_section(project: dict, live: bool = False) -> str:
+def _project_section(project: dict, live: bool = False, status_button: bool = False) -> str:
     tasks = project['tasks']
-    # 已完成的折进一个 details:剩余路径才是每天要看的,完成项只作背景
+    # 只有一个主任务完整展开。优先取可执行 active,其次任意 active,再其次可开工 todo。
+    # 其他 active 收进折叠组,摘要只列标题,主动展开后恢复完整卡片。waiting/可开工 todo
+    # 直接给单行标题;被阻塞 todo、已放弃和已完成默认折叠,展开后也能查看完整内容。
     open_tasks = [task for task in tasks if task['status'] != 'done']
     finished = [task for task in tasks if task['status'] == 'done']
-    spine = '\n'.join(_task_card(task, project['key'], live=live) for task in open_tasks)
+    active = [task for task in open_tasks if task['status'] == 'active']
+    waiting = [task for task in open_tasks if task['status'] == 'waiting']
+    ready = [
+        task for task in open_tasks
+        if task['status'] == 'todo' and task['actionable']
+    ]
+    blocked = [
+        task for task in open_tasks
+        if task['status'] == 'todo' and not task['actionable']
+    ]
+    dropped = [task for task in open_tasks if task['status'] == 'dropped']
+    primary = next(
+        (task for task in active if task['actionable']),
+        active[0] if active else (ready[0] if ready else None),
+    )
+    primary_ref = primary['ref'] if primary else None
+    extra_active = [task for task in active if task['ref'] != primary_ref]
+    compact = list(waiting)
+    compact += [task for task in ready if task['ref'] != primary_ref]
+
+    parts = []
+    if primary:
+        parts.append(_task_card(
+            primary, project['key'], live=live, status_button=status_button,
+            expanded=True,
+        ))
+    if extra_active:
+        titles = '、'.join(
+            esc(task['title'][:18]) + ('…' if len(task['title']) > 18 else '')
+            for task in extra_active
+        )
+        rows = '\n'.join(
+            _task_card(
+                task, project['key'], live=live, status_button=status_button,
+            )
+            for task in extra_active
+        )
+        parts.append(f"""
+        <details class="active-fold">
+          <summary>还有 {len(extra_active)} 项进行中 · {titles}</summary>
+{rows}
+        </details>""")
+    parts.extend(
+        _task_card(
+            task, project['key'], live=live, status_button=status_button,
+        )
+        for task in compact
+    )
+
+    if blocked:
+        rows = '\n'.join(
+            _task_card(
+                task, project['key'], live=live, status_button=status_button,
+            )
+            for task in blocked
+        )
+        parts.append(f"""
+        <details class="blocked-fold">
+          <summary>还有 {len(blocked)} 项被阻塞待办</summary>
+{rows}
+        </details>""")
+
+    if dropped:
+        rows = '\n'.join(
+            _task_card(
+                task, project['key'], live=live, status_button=status_button,
+            )
+            for task in dropped
+        )
+        parts.append(f"""
+        <details class="dropped-fold">
+          <summary>已放弃 {len(dropped)} 项</summary>
+{rows}
+        </details>""")
+
+    spine = '\n'.join(parts)
     if finished:
-        folded = '\n'.join(_task_card(task, project['key'], live=live) for task in finished)
+        folded = '\n'.join(
+            _task_card(
+                task, project['key'], live=live, status_button=status_button,
+            )
+            for task in finished
+        )
         spine += f"""
         <details class="done-fold">
           <summary>已完成 {len(finished)} 项</summary>
@@ -1102,9 +1587,19 @@ def _toolbar(projects: list[dict], write_enabled: bool) -> str:
   </div>"""
 
 
+def _status_menu() -> str:
+    items = ''.join(
+        f'<button type="button" role="menuitemradio" data-status="{status}">{label}</button>'
+        for status, label in STATUS_LABEL.items() if status != 'dropped'
+    )
+    return (f'<div class="status-menu" id="status-menu" hidden role="menu" '
+            f'aria-label="修改状态">{items}</div>')
+
+
 def _dialogs(projects: list[dict], write_enabled: bool) -> str:
     status_actions = ''
     create_dialog = ''
+    status_menu = ''
     if write_enabled:
         status_actions = """
       <button type="button" class="action" data-status="todo">转待办</button>
@@ -1137,6 +1632,7 @@ def _dialogs(projects: list[dict], write_enabled: bool) -> str:
       </form>
     </div>
   </dialog>"""
+        status_menu = _status_menu()
     return f"""
   <dialog id="task-detail">
     <div class="dialog-shell">
@@ -1144,11 +1640,12 @@ def _dialogs(projects: list[dict], write_enabled: bool) -> str:
       <div class="dialog-body"></div>
       <div class="dialog-actions">{status_actions}<button type="button" class="action" data-close>关闭</button></div>
     </div>
-  </dialog>{create_dialog}"""
+  </dialog>{create_dialog}{status_menu}"""
 
 
 def render(snapshot: dict, title: str = '任务看板', live: bool = False,
-           csrf_token: str | None = None, write_enabled: bool = False) -> str:
+           csrf_token: str | None = None, write_enabled: bool = False,
+           view_prefs: dict | None = None, bridge: bool = False) -> str:
     projects = snapshot['projects']
     totals: dict[str, int] = {status: 0 for status in STATUS_LABEL}
     for project in projects:
@@ -1165,9 +1662,13 @@ def render(snapshot: dict, title: str = '任务看板', live: bool = False,
         if projects else ''
     )
     overview = all_projects + ('\n' if all_projects else '') + '\n'.join(
-        _overview_card(project) for project in projects
+        _overview_group(project) for project in projects
     )
-    sections = '\n'.join(_project_section(project, live=live) for project in projects)
+    # 状态 chip 可点击的两个场景:board serve 本机可写(走 /api)、macOS App 导出(走原生桥)
+    status_button = bool((live and write_enabled) or bridge)
+    sections = '\n'.join(
+        _project_section(project, live=live, status_button=status_button) for project in projects
+    )
     if not projects:
         sections = '<p class="empty">还没有项目。先跑 <code>board init &lt;key&gt; --name "..." --repo .</code></p>'
     db_path = (
@@ -1176,8 +1677,17 @@ def render(snapshot: dict, title: str = '任务看板', live: bool = False,
     )
 
     root_attrs = f' data-csrf="{esc(csrf_token or "")}"' if live else ''
+    if live and write_enabled:
+        root_attrs += ' data-write="1"'
     toolbar = _toolbar(projects, write_enabled=live and write_enabled)
     dialogs = _dialogs(projects, write_enabled=write_enabled) if live else ''
+    # bridge 导出没有 _dialogs(那是 serve 的详情/新建对话框),状态菜单单独补上
+    bridge_menu = _status_menu() if bridge else ''
+    # 视图偏好嵌在 FILTER_SCRIPT 之前;replace 防止内容里的 "</" 提前闭合 <script>
+    view_script = ''
+    if view_prefs:
+        payload = json.dumps(view_prefs, ensure_ascii=False).replace('</', '<\\/')
+        view_script = f'<script>window.__BOARD_VIEW__ = {payload};</script>'
 
     return f"""<title>{esc(title)}</title>
 <style>{STYLE}</style>
@@ -1216,8 +1726,8 @@ def render(snapshot: dict, title: str = '任务看板', live: bool = False,
     </main>
   </div>
 </div>
-{dialogs}
-{FILTER_SCRIPT}{LIVE_SCRIPT if live else ''}{INTERACTIVE_SCRIPT if live else ''}
+{dialogs}{bridge_menu}
+{view_script}{FILTER_SCRIPT}{LIVE_SCRIPT if live else ''}{INTERACTIVE_SCRIPT if live else ''}{BRIDGE_STATUS_SCRIPT if bridge else ''}{STATUS_MENU_SCRIPT if status_button else ''}
 """
 
 
