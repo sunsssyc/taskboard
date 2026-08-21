@@ -192,6 +192,14 @@ section[hidden] { display:none; }
           padding-left:9px; }
 .accept b { font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; color:var(--accent);
             text-transform:uppercase; margin-right:6px; }
+/* 折叠箭头统一为 macOS 式 chevron:右向闭合,展开旋转 90° 向下 */
+summary { list-style:none; }
+summary::-webkit-details-marker { display:none; }
+summary::before { content:''; display:inline-block; width:7px; height:7px; margin-right:7px;
+  border-right:1.8px solid var(--ink-faint); border-bottom:1.8px solid var(--ink-faint);
+  vertical-align:1px; transform:rotate(-45deg); transition:transform .15s ease; }
+details[open] > summary::before { transform:rotate(45deg); }
+@media (prefers-reduced-motion: reduce) { summary::before { transition:none; } }
 .done-fold { margin-top:0; border-top:1px solid var(--rule-soft); }
 .done-fold summary { cursor:pointer; font-family:var(--mono); font-size:11.5px; color:var(--ink-faint);
                      padding:7px 10px 7px 38px; background:var(--chrome); }
@@ -240,6 +248,7 @@ section[hidden] { display:none; }
 .note-group { display:flex; flex-direction:column; gap:9px; scroll-margin-top:82px; }
 .note-group[hidden] { display:none; }
 .note-group-head { display:flex; align-items:baseline; gap:9px; padding:6px 2px; cursor:pointer; }
+.note-group-head::before { align-self:center; margin-right:-2px; }
 .note-group-head:hover h3 { color:var(--accent); }
 .note-group-head:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 .note-group-head h3 { margin:0; font-size:14px; font-weight:650; }
@@ -271,7 +280,7 @@ section[hidden] { display:none; }
 .note.superseded { grid-column:1/-1; background:var(--chrome); border:0; padding:8px 12px; }
 .note-filter-wrapper { grid-column:1/-1; border-bottom:1px solid var(--rule-soft); }
 .note-filter-wrapper:last-child { border-bottom:0; }
-.note.superseded summary { cursor:pointer; font-size:13px; color:var(--ink-faint); list-style-position:outside; }
+.note.superseded summary { cursor:pointer; font-size:13px; color:var(--ink-faint); }
 .note.superseded summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 .note.superseded .tag { display:inline-block; font-family:var(--mono); font-size:10px;
                         letter-spacing:.03em; color:var(--alert); background:var(--alert-soft);
