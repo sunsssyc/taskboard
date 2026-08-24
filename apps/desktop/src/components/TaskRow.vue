@@ -21,6 +21,11 @@ const statusLabel = computed(() => {
   return props.task.actionable ? "可开工" : "被阻塞";
 });
 
+const statusClass = computed(() => {
+  if (props.task.status === "todo" && !props.task.actionable) return "status-blocked";
+  return `status-${props.task.status}`;
+});
+
 const hasDetails = computed(
   () =>
     Boolean(props.task.detail || props.task.accept || props.task.branch || props.task.pr) ||
@@ -41,7 +46,11 @@ function formatTime(value: string | null): string {
 </script>
 
 <template>
-  <article class="task-row" :class="[`status-${task.status}`, { expanded }]">
+  <article
+    class="task-row"
+    :class="[`status-${task.status}`, { expanded }]"
+    :data-ref="task.ref"
+  >
     <button
       type="button"
       class="task-row-head"
@@ -54,7 +63,12 @@ function formatTime(value: string | null): string {
       <span class="task-title">{{ task.title }}</span>
       <span v-if="task.gate" class="gate-chip">闸门</span>
       <span class="task-owner">{{ task.owner ? `@${task.owner}` : "未分配" }}</span>
-      <span class="status-chip" :class="`status-${task.status}`">{{ statusLabel }}</span>
+      <span v-if="task.repositories.length" class="task-repositories">
+        <span v-for="repository in task.repositories" :key="repository.name">
+          {{ repository.name }}
+        </span>
+      </span>
+      <span class="status-chip" :class="statusClass">{{ statusLabel }}</span>
     </button>
 
     <div v-if="expanded && hasDetails" class="task-detail">

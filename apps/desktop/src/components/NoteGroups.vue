@@ -38,6 +38,13 @@ const sections = computed(() => [
   },
 ]);
 
+const findingCategories = computed(() =>
+  categoryGroups(props.findings).map((group) => ({
+    name: group.category,
+    count: group.items.length,
+  })),
+);
+
 function categoryGroups(notes: BoardNote[]) {
   const groups = new Map<string, BoardNote[]>();
   for (const note of notes) {
@@ -61,11 +68,17 @@ function toggleNote(id: number) {
   <section v-if="findings.length || risks.length || links.length" class="notes-panel">
     <header class="panel-heading">
       <div>
-        <span class="eyebrow">知识与交付</span>
-        <h2>结论、风险和入口</h2>
+        <span class="eyebrow">已判定，不再推演</span>
+        <h2>约束性结论</h2>
       </div>
       <span class="panel-count">{{ findings.length + risks.length + links.length }} 条</span>
     </header>
+
+    <div v-if="findingCategories.length" class="category-tabs" aria-label="结论分类">
+      <span v-for="category in findingCategories" :key="category.name">
+        {{ category.name }} <b>{{ category.count }}</b>
+      </span>
+    </div>
 
     <div class="note-sections">
       <section

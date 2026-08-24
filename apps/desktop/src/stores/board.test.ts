@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { demoSnapshot } from "../demo";
-import { noteMatches, taskMatches, useBoardStore } from "./board";
+import { noteMatches, projectMatches, taskMatches, useBoardStore } from "./board";
 
 describe("board search", () => {
   beforeEach(() => setActivePinia(createPinia()));
@@ -26,5 +26,25 @@ describe("board search", () => {
     board.query = "概率";
     expect(board.selectedProject?.key).toBe("reg-calibration");
     expect(board.matchingTasks.map((task) => task.ref)).toEqual([27]);
+  });
+
+  it("searches project metadata as a whole-project match", () => {
+    const project = demoSnapshot.projects[1];
+    expect(projectMatches(project, "coinex_backend")).toBe(true);
+    expect(projectMatches(project, "不存在")).toBe(false);
+  });
+
+  it("supports all-project, status, and owner filters", () => {
+    const board = useBoardStore();
+    board.snapshot = demoSnapshot;
+    expect(board.selectedProject).toBeNull();
+    expect(board.displayProjects).toHaveLength(2);
+
+    board.statusFilter = "active";
+    expect(board.filteredTasks(demoSnapshot.projects[0]).map((task) => task.ref)).toEqual([26]);
+
+    board.statusFilter = "";
+    board.ownerFilter = "双方";
+    expect(board.filteredTasks(demoSnapshot.projects[0]).map((task) => task.ref)).toEqual([18]);
   });
 });

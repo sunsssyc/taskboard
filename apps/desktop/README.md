@@ -51,5 +51,6 @@ cargo test --manifest-path src-tauri/Cargo.toml
 npm run tauri build -- --no-bundle
 ```
 
-当前 POC 已覆盖需求切换、当前需求搜索、任务状态分组、任务详情折叠、结论/风险分类折叠，以及
-375px、1440px、1600px 三档布局。状态写入和 sidecar 正式打包不在本阶段范围内。
+当前 POC 已按成熟看板视觉迁移全局统计、搜索、状态/负责人筛选、全部/单需求切换、需求任务
+大纲、任务 spine、任务详情折叠与结论/风险分类折叠，并覆盖 375px、1440px、1600px 三档
+布局。状态写入和 sidecar 正式打包不在本阶段范围内。
