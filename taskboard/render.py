@@ -1,168 +1,489 @@
 """把状态快照渲染成自包含 HTML(无外部资源,可直接发布)。
 
-视觉语言:冷石板中性色 + 汽油蓝主色,状态用语义色单独承载;标题无衬线、
-数据等宽、结论用衬线以区别"叙述"与"状态"。明暗主题按 token 三态定义。
+视觉语言:macOS 原生浅色工作区——毛玻璃工具栏、圆角分组列表、胶囊状态标签和
+右侧 Inspector。色彩对齐系统语义色,靠 hairline 分隔与柔和投影建立层级。
 """
 from __future__ import annotations
 
 import html
 import json
-from datetime import datetime
+import re
+from datetime import datetime, timedelta, timezone
+from urllib.parse import urlsplit
 
 STATUS_LABEL = {'todo': '待办', 'active': '进行中', 'waiting': '等人工',
                 'done': '已完成', 'dropped': '已放弃'}
+HTML_PREFIX = '<!doctype html><meta charset="utf-8">'
+LONG_NOTE_BODY_CHARS = 320
+UTC_PLUS_8 = timezone(timedelta(hours=8))
+
+
+def html_document(body: str) -> str:
+    """补齐静态文件和 WebView 都能可靠识别的 UTF-8 文档头。"""
+    return HTML_PREFIX + body
 
 STYLE = """
 :root {
-  --ground:#eef2f2; --surface:#fbfcfc; --sunken:#e4eaea; --rule:#cfd9d9; --rule-soft:#dde5e5;
-  --ink:#121a1b; --ink-muted:#566264; --ink-faint:#7c8a8c;
-  --accent:#0e6b78; --accent-soft:#d9ebee;
-  --done:#2b6f52; --done-soft:#dcece4; --active:#8f5a0c; --active-soft:#f6e8cf;
-  --wait:#63706f; --wait-soft:#e2e8e8; --alert:#9b3529; --alert-soft:#f5e0dc;
-  --shadow:0 1px 2px rgba(18,26,27,.06), 0 6px 16px -10px rgba(18,26,27,.18);
+  color-scheme:light;
+  --ground:#f5f5f7; --surface:#ffffff; --chrome:#f7f7f8; --sunken:#f2f2f4;
+  --rule:rgba(0,0,0,.1); --rule-soft:rgba(0,0,0,.06);
+  --ink:#1d1d1f; --ink-muted:rgba(60,60,67,.6); --ink-faint:rgba(60,60,67,.42);
+  --accent:#007aff; --accent-hover:#0066d6; --accent-soft:#e8f2ff;
+  --done:#248a3d; --done-soft:#eaf6ed; --active:#b25b00; --active-soft:#fff2df;
+  --wait:#6e6e73; --wait-soft:#eeeef0; --alert:#c4312b; --alert-soft:#fff0ef;
+  --shadow:0 1px 2px rgba(0,0,0,.05),0 10px 28px rgba(0,0,0,.07);
+  --inspector-shadow:-18px 0 48px rgba(0,0,0,.16);
+  --radius-lg:13px; --radius-md:9px; --radius-sm:7px;
+  --ring:0 0 0 3.5px rgba(0,122,255,.22);
   --sans:system-ui,-apple-system,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
   --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
-  --serif:Georgia,"Songti SC","Noto Serif CJK SC",serif;
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --ground:#0d1213; --surface:#151d1e; --sunken:#101718; --rule:#26312f; --rule-soft:#1d2626;
-    --ink:#e3ecec; --ink-muted:#96a4a5; --ink-faint:#758385;
-    --accent:#4fbecb; --accent-soft:#10313a;
-    --done:#5cb188; --done-soft:#142b22; --active:#d39c42; --active-soft:#2e2413;
-    --wait:#8d9a9a; --wait-soft:#1c2424; --alert:#dd7a70; --alert-soft:#2f1a18;
-    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 20px -12px rgba(0,0,0,.6);
-  }
-}
-:root[data-theme="dark"] {
-  --ground:#0d1213; --surface:#151d1e; --sunken:#101718; --rule:#26312f; --rule-soft:#1d2626;
-  --ink:#e3ecec; --ink-muted:#96a4a5; --ink-faint:#758385;
-  --accent:#4fbecb; --accent-soft:#10313a;
-  --done:#5cb188; --done-soft:#142b22; --active:#d39c42; --active-soft:#2e2413;
-  --wait:#8d9a9a; --wait-soft:#1c2424; --alert:#dd7a70; --alert-soft:#2f1a18;
-  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 20px -12px rgba(0,0,0,.6);
 }
 * { box-sizing: border-box; }
 body {
   margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans);
-  font-size:15px; line-height:1.6; -webkit-font-smoothing:antialiased;
-  overflow-wrap:break-word;
+  font-size:14px; line-height:1.55; -webkit-font-smoothing:antialiased;
+  text-rendering:optimizeLegibility; overflow-wrap:break-word;
 }
-.wrap { max-width:1060px; margin:0 auto; padding:38px 24px 72px; display:flex; flex-direction:column; gap:32px; }
-.eyebrow { font-family:var(--mono); font-size:11px; letter-spacing:.13em; text-transform:uppercase; color:var(--ink-faint); }
-h1 { margin:0; font-size:clamp(25px,4vw,32px); letter-spacing:-.022em; font-weight:620; text-wrap:balance; }
-.masthead { display:flex; flex-direction:column; gap:8px; }
-.meta-line { display:flex; flex-wrap:wrap; gap:6px 18px; font-family:var(--mono); font-size:11.5px; color:var(--ink-faint); }
+::selection { background:rgba(0,122,255,.16); }
+mark[data-hl] { background:rgba(255,214,10,.45); color:inherit; border-radius:3px; padding:0 1px; }
+::-webkit-scrollbar { width:10px; height:10px; }
+::-webkit-scrollbar-thumb { border:2.5px solid transparent; border-radius:999px;
+  background:rgba(0,0,0,.16); background-clip:content-box; }
+::-webkit-scrollbar-thumb:hover { background:rgba(0,0,0,.28); background-clip:content-box; }
+.wrap { min-height:100vh; display:grid; grid-template-rows:auto auto minmax(0,1fr); }
+.eyebrow { font-size:11px; color:var(--ink-faint); white-space:nowrap; }
+h1 { margin:0; font-size:17px; letter-spacing:0; font-weight:700; white-space:nowrap; }
+.masthead { position:sticky; top:0; z-index:7; min-height:52px; padding:8px 18px;
+  display:flex; align-items:center; gap:10px; background:rgba(247,247,248,.82);
+  border-bottom:1px solid var(--rule); backdrop-filter:saturate(180%) blur(20px);
+  -webkit-backdrop-filter:saturate(180%) blur(20px); }
+.masthead .eyebrow { order:1; }
+.meta-line { margin-left:auto; display:flex; flex-wrap:wrap; justify-content:flex-end; gap:4px 14px;
+  order:2; font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); }
 
-.overview { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
+.toolbar { position:sticky; top:52px; z-index:6; display:flex; flex-wrap:wrap; gap:7px;
+  min-height:44px; padding:7px 14px; background:rgba(250,250,251,.82);
+  border-bottom:1px solid var(--rule); backdrop-filter:saturate(180%) blur(20px);
+  -webkit-backdrop-filter:saturate(180%) blur(20px); }
+.toolbar .search { flex:1 1 250px; min-width:0; }
+input, select, textarea { min-width:0; border:1px solid var(--rule); border-radius:var(--radius-sm);
+  background:var(--surface); color:var(--ink); font:inherit; padding:5px 9px;
+  transition:border-color .15s ease, box-shadow .15s ease; }
+input, select { min-height:29px; }
+input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline:0; border-color:var(--accent); box-shadow:var(--ring); }
+button.action { border:1px solid var(--rule); border-radius:var(--radius-sm); background:var(--surface);
+  color:var(--ink); font:inherit; font-size:12.5px; min-height:29px; padding:4px 12px; cursor:pointer;
+  box-shadow:0 .5px 1.5px rgba(0,0,0,.07);
+  transition:background .12s ease, border-color .12s ease, box-shadow .12s ease; }
+button.action:hover { border-color:rgba(0,0,0,.18); background:var(--sunken); }
+button.action:active { box-shadow:none; }
+button.action.primary { color:#fff; border-color:transparent; background:var(--accent);
+  box-shadow:0 1px 2px rgba(0,90,200,.3); }
+button.action.primary:hover { border-color:transparent; background:var(--accent-hover); }
+button.action.danger { color:var(--alert); border-color:var(--alert); }
+button.action:focus-visible { outline:0; box-shadow:var(--ring); }
+.filter-empty { display:none; color:var(--ink-faint); font-size:13px; }
+.filter-empty[data-on] { display:block; }
+
+.workspace { min-width:0; display:grid; grid-template-columns:248px minmax(0,1fr); align-items:start; }
+.navigator { position:sticky; top:96px; align-self:start; height:calc(100vh - 96px); min-width:0;
+  overflow:auto; background:var(--chrome); border-right:1px solid var(--rule); padding:14px 10px 20px; }
+.navigator-head { display:flex; align-items:center; justify-content:space-between; padding:0 9px 8px;
+  color:var(--ink-faint); font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; }
+.navigator-head b { font-family:var(--mono); color:var(--ink-faint); font-weight:500; }
+.content { min-width:0; padding:24px 30px 64px; display:flex; flex-direction:column; gap:28px; }
+
+.overview { display:flex; flex-direction:column; gap:2px; }
 /* 卡片是切换按钮:点它只看该项目,再点一次看全部。
    不用锚点跳转——页面常被宿主整高渲染,文档自身不滚动,#锚点点了没反应。 */
-.pcard { position:relative; background:var(--surface); border:1px solid var(--rule); border-radius:4px;
-         padding:14px 16px; display:flex; flex-direction:column; gap:9px; box-shadow:var(--shadow);
+.pcard { position:relative; background:transparent; border:0; border-radius:var(--radius-md);
+         padding:9px 11px; display:flex; flex-direction:column; gap:6px; box-shadow:none;
          cursor:pointer; text-align:left; font:inherit; color:inherit; width:100%;
-         transition:border-color .15s ease, transform .15s ease; }
-.pcard:hover { border-color:var(--accent); transform:translateY(-1px); }
-.pcard:hover h3 { color:var(--accent); }
-.pcard:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
-.pcard[aria-pressed="true"] { border-color:var(--accent); box-shadow:inset 3px 0 0 var(--accent), var(--shadow); }
-.pcard[aria-pressed="true"] h3 { color:var(--accent); }
-.overview[data-filtered] .pcard[aria-pressed="false"] { opacity:.5; }
-.filter-note { display:none; align-items:center; gap:10px; font-family:var(--mono); font-size:11.5px;
-               color:var(--ink-faint); }
+         transition:background .15s ease, box-shadow .15s ease; }
+.pcard:hover { background:rgba(0,0,0,.05); }
+.pcard:hover h3 { color:var(--ink); }
+.pcard:focus-visible { outline:0; box-shadow:var(--ring); }
+.pcard[aria-pressed="true"] { color:#fff; background:var(--accent);
+         box-shadow:0 1px 4px rgba(0,90,200,.35); }
+.pcard[aria-pressed="true"] h3, .pcard[aria-pressed="true"] .key,
+.pcard[aria-pressed="true"] .counts, .pcard[aria-pressed="true"] .nextline,
+.pcard[aria-pressed="true"] .nextline span { color:#fff; }
+.pcard[aria-pressed="true"] .bar { background:rgba(255,255,255,.28); }
+.pcard[aria-pressed="true"] .bar i.done { background:#fff; }
+.pcard[aria-pressed="true"] .bar i.active { background:rgba(255,255,255,.62); }
+.overview[data-filtered] .pcard[aria-pressed="false"] { opacity:1; }
+.pcard.all-projects { min-height:34px; justify-content:center; margin-bottom:4px; }
+.pcard.all-projects h3 { font-size:12.5px; }
+.pcard.all-projects .key { order:0; }
+/* 侧边栏项目卡:拖动排序 + 置顶按钮(偏好存 localStorage,不写库) */
+.pin-button { position:absolute; top:6px; right:6px; display:grid; place-items:center;
+  width:20px; height:20px; border:0; border-radius:6px; background:transparent;
+  color:var(--ink-faint); cursor:pointer; opacity:0; transition:opacity .15s ease, background .15s ease; }
+.pcard:hover .pin-button, .pin-button:focus-visible { opacity:1; }
+.pin-button:hover { background:rgba(0,0,0,.07); color:var(--ink); }
+.pcard.pinned .pin-button { opacity:1; color:var(--accent); }
+.pcard[aria-pressed="true"] .pin-button { color:rgba(255,255,255,.75); }
+.pcard[aria-pressed="true"] .pin-button:hover { background:rgba(255,255,255,.2); color:#fff; }
+.pcard[aria-pressed="true"].pinned .pin-button { color:#fff; }
+.pcard.dragging { opacity:.45; }
+/* 侧边栏大纲:项目卡下挂当前要动的任务行,点击定位到右侧卡片 */
+.pgroup { border-radius:var(--radius-md); }
+.pgroup[data-selected] { background:var(--accent); box-shadow:0 4px 14px rgba(0,113,227,.3); }
+.ptasks { display:flex; flex-direction:column; padding:0 4px 5px; }
+.ptask { display:flex; align-items:center; gap:6px; padding:3px 8px 3px 14px; border:0;
+  background:none; font:inherit; font-size:12px; color:var(--ink-muted); cursor:pointer;
+  border-radius:6px; text-align:left; min-width:0; }
+.ptask:hover { background:rgba(0,0,0,.05); color:var(--ink); }
+.ptask:focus-visible { outline:0; box-shadow:var(--ring); }
+.ptask .ref { font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); flex:none; }
+.ptask .ptitle { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ptask .dot { width:6px; height:6px; border-radius:50%; flex:none; }
+.ptask .dot.active { background:var(--active); }
+.ptask .dot.waiting { background:transparent; box-shadow:inset 0 0 0 1.5px var(--active); }
+.ptask .dot.todo { background:var(--wait); }
+.ptask.more { color:var(--ink-faint); font-size:11px; padding-left:26px; }
+.ptask[aria-current="true"] { background:rgba(0,0,0,.06); color:var(--ink); font-weight:500; }
+.pgroup[data-selected] .ptask { color:rgba(255,255,255,.88); }
+.pgroup[data-selected] .ptask:hover { background:rgba(255,255,255,.14); color:#fff; }
+.pgroup[data-selected] .ptask .ref { color:rgba(255,255,255,.62); }
+.pgroup[data-selected] .ptask .dot.active { background:#fff; }
+.pgroup[data-selected] .ptask .dot.waiting { box-shadow:inset 0 0 0 1.5px rgba(255,255,255,.85); }
+.pgroup[data-selected] .ptask .dot.todo { background:rgba(255,255,255,.55); }
+.pgroup[data-selected] .ptask.more { color:rgba(255,255,255,.62); }
+.pgroup[data-selected] .ptask[aria-current="true"] { background:rgba(255,255,255,.18); color:#fff; }
+/* 从大纲定位卡片时闪烁一下底色,给眼睛一个落点 */
+@keyframes step-flash { 0%,35% { background:var(--accent-soft); } 100% { background:transparent; } }
+.step.flash { animation:step-flash 1.2s ease-out; }
+/* live 可写时状态 chip 是按钮,点击弹出状态菜单 */
+button.chip { appearance:none; -webkit-appearance:none; cursor:pointer; }
+button.chip.status-button { display:inline-flex; align-items:center; gap:5px; }
+button.chip.status-button::after { content:''; width:4px; height:4px; flex:none;
+  border-right:1.2px solid currentColor; border-bottom:1.2px solid currentColor;
+  transform:translateY(-1px) rotate(45deg); }
+button.chip:focus-visible { outline:0; box-shadow:var(--ring); }
+.status-menu { position:fixed; z-index:20; min-width:136px; padding:5px; background:var(--surface);
+  border:1px solid var(--rule); border-radius:10px;
+  box-shadow:0 4px 24px rgba(0,0,0,.14),0 1px 4px rgba(0,0,0,.08);
+  display:flex; flex-direction:column; }
+.status-menu[hidden] { display:none; }
+.status-menu button { display:flex; align-items:center; border:0; background:none; font:inherit;
+  font-size:13px; text-align:left; padding:5px 9px; border-radius:6px; cursor:pointer; color:var(--ink); }
+.status-menu button::before { content:''; width:14px; flex:none; font-size:11px; }
+.status-menu button.current::before { content:'✓'; }
+.status-menu button:hover { background:var(--accent); color:#fff; }
+.status-menu button:focus-visible { outline:0; box-shadow:var(--ring); }
+.filter-note { display:none; align-items:center; gap:10px; font-size:12px; color:var(--ink-faint); }
 .filter-note[data-on] { display:flex; }
-.filter-note button { font:inherit; color:var(--accent); background:none; border:1px solid var(--rule);
-                      border-radius:2px; padding:3px 9px; cursor:pointer; }
+.filter-note button { font:inherit; color:var(--accent); background:none; border:0;
+                      border-radius:var(--radius-sm); padding:2px 5px; cursor:pointer; }
 .filter-note button:hover { border-color:var(--accent); }
 .filter-note button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
 @media (prefers-reduced-motion: reduce) {
   .pcard { transition:none; }
   .pcard:hover { transform:none; }
 }
-.pcard h3 { margin:0; font-size:15px; font-weight:620; letter-spacing:-.006em; }
-.pcard .key { font-family:var(--mono); font-size:11px; color:var(--ink-faint); }
-.bar { height:5px; border-radius:3px; background:var(--sunken); overflow:hidden; display:flex; }
+.pcard h3 { margin:0; font-size:13px; line-height:1.35; font-weight:620; letter-spacing:0; }
+.pcard .key { order:-1; font-family:var(--mono); font-size:9.5px; color:var(--ink-faint); overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; }
+.bar { height:4px; border-radius:999px; background:rgba(0,0,0,.08); overflow:hidden; display:flex; }
 .bar i { display:block; height:100%; }
 .bar i.done { background:var(--done); }
 .bar i.active { background:var(--active); }
-.counts { display:flex; gap:12px; font-family:var(--mono); font-size:11.5px; font-variant-numeric:tabular-nums; color:var(--ink-muted); }
+.counts { display:flex; flex-wrap:wrap; gap:2px 8px; font-family:var(--mono); font-size:10px; font-variant-numeric:tabular-nums; color:var(--ink-muted); }
 .counts b { font-weight:600; }
-.nextline { font-size:13px; color:var(--ink-muted); }
+.repo-tags { display:flex; flex-wrap:wrap; gap:3px; min-width:0; }
+.repo-tag { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  padding:2px 6px; border-radius:999px; background:var(--sunken); color:var(--ink-muted);
+  font-family:var(--mono); font-size:9px; line-height:1.35; }
+.pcard[aria-pressed="true"] .repo-tag { background:rgba(255,255,255,.16); color:rgba(255,255,255,.82); }
+.nextline { font-size:11px; color:var(--ink-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .nextline span { color:var(--ink-faint); }
 
 html { scroll-behavior:smooth; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior:auto; } }
 /* 锚点跳转后标题不贴着视口顶边 */
-section { display:flex; flex-direction:column; gap:14px; scroll-margin-top:18px; }
+section { display:flex; flex-direction:column; gap:10px; scroll-margin-top:110px; }
 /* display:flex 会压过 UA 的 [hidden]{display:none},切换项目时必须显式盖回来 */
 section[hidden] { display:none; }
-.sec-head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; border-bottom:1px solid var(--rule); padding-bottom:9px; }
-.sec-head h2 { margin:0; font-size:17px; font-weight:620; letter-spacing:-.01em; }
-.sec-head .key { font-family:var(--mono); font-size:11.5px; color:var(--ink-faint); }
+.sec-head { display:flex; align-items:baseline; gap:9px; flex-wrap:wrap; padding-bottom:6px; }
+.sec-head h2 { margin:0; font-size:15px; font-weight:700; letter-spacing:0; }
+.sec-head .key { max-width:100%; min-width:0; overflow-wrap:anywhere; font-family:var(--mono);
+                 font-size:11.5px; color:var(--ink-faint); }
 .sec-head p { margin:0; font-size:13px; color:var(--ink-muted); flex:1 1 240px; }
 
-.spine { display:flex; flex-direction:column; }
-.step { display:grid; grid-template-columns:32px 1fr; gap:13px; position:relative; padding-bottom:11px; }
-.step::before { content:""; position:absolute; left:15px; top:25px; bottom:0; width:1px; background:var(--rule); }
-.step:last-child::before { display:none; }
-.node { width:31px; height:31px; border-radius:50%; display:grid; place-items:center; z-index:1;
-        font-family:var(--mono); font-size:12px; font-variant-numeric:tabular-nums;
-        background:var(--surface); border:1px solid var(--rule); color:var(--ink-muted); }
-.step[data-status="done"] .node { background:var(--done-soft); border-color:var(--done); color:var(--done); }
-.step[data-status="active"] .node { background:var(--active-soft); border-color:var(--active); color:var(--active); font-weight:700; }
+.spine { display:flex; flex-direction:column; min-width:0; overflow:hidden; background:var(--surface);
+  border:1px solid var(--rule); border-radius:var(--radius-lg);
+  box-shadow:0 1px 2px rgba(0,0,0,.04); }
+.step { display:grid; grid-template-columns:48px minmax(0,1fr); gap:0; position:relative;
+        min-width:0; padding:0; border-bottom:1px solid var(--rule-soft); }
+.step:last-child { border-bottom:0; }
+.step[hidden], [data-filter-item][hidden] { display:none; }
+.step::before { display:none; }
+.node { width:48px; min-height:42px; display:grid; place-items:start center; padding-top:10px;
+        font-family:var(--mono); font-size:10.5px; font-variant-numeric:tabular-nums;
+        background:transparent; border:0; color:var(--ink-faint); }
+.task-disclosure { position:relative; width:100%; min-width:38px; min-height:24px; padding:0;
+  border:0; border-radius:4px; background:none; color:inherit; font:inherit; cursor:pointer; }
+.task-disclosure::before { content:''; position:absolute; left:50%; top:50%; width:6px; height:6px;
+  border-right:1.6px solid currentColor; border-bottom:1.6px solid currentColor;
+  transform:translate(-50%,-50%) rotate(-45deg); transition:transform .15s ease; }
+.task-disclosure[aria-expanded="true"]::before { transform:translate(-50%,-50%) rotate(45deg); }
+.task-disclosure > span { position:absolute; left:calc(50% + 8px); top:50%;
+  transform:translateY(-50%); }
+.task-disclosure:hover { color:var(--accent); background:rgba(0,122,255,.08); }
+.task-disclosure:focus-visible { outline:0; box-shadow:var(--ring); }
+@media (prefers-reduced-motion: reduce) { .task-disclosure::before { transition:none; } }
+.step[data-status="done"] .node { background:transparent; color:var(--done); }
+.step[data-status="active"] .node { background:transparent; color:var(--accent); font-weight:700; }
 .step[data-status="dropped"] .node { color:var(--ink-faint); opacity:.6; }
-.card { background:var(--surface); border:1px solid var(--rule); border-radius:4px; padding:12px 15px;
-        display:flex; flex-direction:column; gap:6px; box-shadow:var(--shadow); }
-.step[data-status="active"] .card { border-left:3px solid var(--active); }
-.step[data-status="done"] .card { background:var(--sunken); box-shadow:none; }
+.card { background:var(--surface); border:0; border-radius:0; padding:10px 12px 11px 0;
+        display:flex; flex-direction:column; gap:5px; min-width:0; box-shadow:none; }
+.step:hover .card, .step:hover .node { background:rgba(0,0,0,.02); }
+.step[data-status="active"] { box-shadow:inset 3px 0 0 var(--accent); background:var(--accent-soft); }
+.step[data-status="active"] .card, .step[data-status="active"] .node { background:transparent; }
+.step[data-status="done"] .card { background:rgba(0,0,0,.02); box-shadow:none; }
 .step[data-status="dropped"] .card { opacity:.55; }
-.card-top { display:flex; flex-wrap:wrap; gap:7px 11px; align-items:center; }
-.card-top h3 { margin:0; font-size:14.5px; font-weight:600; letter-spacing:-.004em; flex:1 1 auto; min-width:180px; }
+.card-top { display:flex; flex-wrap:wrap; gap:7px 11px; align-items:center; min-width:0; }
+.card-top h3 { margin:0; min-width:0; overflow-wrap:anywhere; font-size:13.5px; font-weight:600;
+               letter-spacing:0; flex:1 1 180px; }
+.detail-button { border:0; background:none; color:var(--accent); font:inherit; font-size:11.5px;
+                 padding:2px 4px; cursor:pointer; white-space:nowrap; }
+.detail-button:hover { text-decoration:underline; text-underline-offset:2px; }
+.detail-button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
 .step[data-status="dropped"] .card-top h3 { text-decoration:line-through; }
-.card p { margin:0; font-size:13.5px; color:var(--ink-muted); max-width:76ch; }
-.chip { font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; text-transform:uppercase;
-        padding:3px 8px; border-radius:2px; white-space:nowrap; border:1px solid transparent; }
-.chip.done { background:var(--done-soft); color:var(--done); border-color:var(--done); }
-.chip.active { background:var(--active-soft); color:var(--active); border-color:var(--active); }
-.chip.todo { background:var(--wait-soft); color:var(--wait); border-color:var(--rule); }
-.chip.waiting { background:var(--active-soft); color:var(--active); border-color:var(--rule); }
-.chip.meta { background:var(--sunken); color:var(--ink-muted); border-color:var(--rule); text-transform:none; }
+.card p { margin:0; min-width:0; overflow-wrap:anywhere; font-size:13px; color:var(--ink-muted);
+          max-width:76ch; }
+.card .markdown { max-width:76ch; font-size:13.5px; color:var(--ink-muted); }
+.chip { font-family:var(--mono); font-size:9.5px; letter-spacing:.03em; text-transform:uppercase;
+        padding:2px 8px; border-radius:999px; white-space:nowrap; border:0; }
+.chip.done { background:var(--done-soft); color:var(--done); }
+.chip.active { background:var(--active-soft); color:var(--active); }
+.chip.todo { background:var(--wait-soft); color:var(--wait); }
+.chip.waiting { background:var(--active-soft); color:var(--active); }
+.chip.meta { background:var(--sunken); color:var(--ink-muted); text-transform:none; }
+.chip.repo { background:#eef4fb; color:#49647f; text-transform:none; }
 .accept { font-size:13px; color:var(--ink-muted); border-left:2px solid var(--accent);
           padding-left:9px; }
 .accept b { font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; color:var(--accent);
             text-transform:uppercase; margin-right:6px; }
-.done-fold { margin-top:2px; }
+.lifecycle { display:flex; flex-wrap:wrap; gap:3px 14px; margin-top:3px;
+  font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); }
+.lifecycle b { margin-right:5px; color:var(--ink-muted); font-weight:500; }
+.task-body[hidden] { display:none; }
+/* 折叠箭头统一为 macOS 式 chevron:右向闭合,展开旋转 90° 向下 */
+summary { list-style:none; }
+summary::-webkit-details-marker { display:none; }
+summary::before { content:''; display:inline-block; width:7px; height:7px; margin-right:7px;
+  border-right:1.8px solid var(--ink-faint); border-bottom:1.8px solid var(--ink-faint);
+  vertical-align:1px; transform:rotate(-45deg); transition:transform .15s ease; }
+details[open] > summary::before { transform:rotate(45deg); }
+@media (prefers-reduced-motion: reduce) { summary::before { transition:none; } }
+.done-fold { margin-top:0; border-top:1px solid var(--rule-soft); }
 .done-fold summary { cursor:pointer; font-family:var(--mono); font-size:11.5px; color:var(--ink-faint);
-                     padding:7px 0 7px 45px; }
+                     background:var(--chrome); }
 .done-fold summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 .done-fold[open] summary { color:var(--ink-muted); }
-.chip.dropped { background:var(--wait-soft); color:var(--ink-faint); border-color:var(--rule); }
-.chip.gate { background:var(--alert-soft); color:var(--alert); border-color:var(--alert); }
+.active-fold { border-top:1px solid var(--rule-soft); }
+.active-fold summary { cursor:pointer; font-size:12px;
+  color:var(--active); background:var(--active-soft); overflow:hidden;
+  text-overflow:ellipsis; white-space:nowrap; }
+.active-fold summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.blocked-fold, .dropped-fold { border-top:1px solid var(--rule-soft); }
+.blocked-fold summary, .dropped-fold summary { cursor:pointer;
+  font-size:12px; color:var(--ink-muted); background:var(--chrome); }
+.blocked-fold summary:focus-visible, .dropped-fold summary:focus-visible {
+  outline:2px solid var(--accent); outline-offset:3px; }
+.done-fold summary, .active-fold summary, .blocked-fold summary, .dropped-fold summary {
+  min-height:40px; padding:7px 12px 7px 0; display:grid;
+  grid-template-columns:48px minmax(0,1fr); align-items:center; }
+.done-fold summary::before, .active-fold summary::before,
+.blocked-fold summary::before, .dropped-fold summary::before {
+  grid-column:1; justify-self:center; margin:0; }
+/* 分组 summary 是父节点；折叠组内任务向右缩进一层，避免与父节点同级。 */
+.done-fold > .step, .active-fold > .step,
+.blocked-fold > .step, .dropped-fold > .step {
+  grid-template-columns:64px minmax(0,1fr); }
+.done-fold > .step > .node, .active-fold > .step > .node,
+.blocked-fold > .step > .node, .dropped-fold > .step > .node { width:64px; }
+.chip.dropped { background:var(--wait-soft); color:var(--ink-faint); }
+.chip.gate { background:var(--alert-soft); color:var(--alert); }
 .chip.who { background:var(--accent-soft); color:var(--accent); }
-.chip.ready { background:var(--accent-soft); color:var(--accent); border-color:var(--accent); }
+.chip.ready { background:var(--accent-soft); color:var(--accent); }
 .dep { font-family:var(--mono); font-size:11.5px; color:var(--ink-faint); }
 .dep b { color:var(--alert); font-weight:600; }
 
-.notes { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
-.note { background:var(--surface); border:1px solid var(--rule); border-radius:4px; padding:13px 15px;
-        display:flex; flex-direction:column; gap:5px; }
+.markdown { min-width:0; overflow-wrap:anywhere; }
+.markdown > :first-child { margin-top:0; }
+.markdown > :last-child { margin-bottom:0; }
+.markdown p { margin:0 0 7px; }
+.markdown ul, .markdown ol { margin:5px 0 8px; padding-left:22px; }
+.markdown li { margin:2px 0; }
+.markdown blockquote { margin:7px 0; padding:2px 0 2px 11px; border-left:2px solid var(--accent);
+                      color:var(--ink-muted); }
+.markdown h5, .markdown h6 { margin:10px 0 5px; font-size:13px; line-height:1.45; font-weight:620; }
+.markdown code, .accept code { font-family:var(--mono); font-size:.92em; background:var(--sunken);
+                               border-radius:5px; padding:1px 5px; }
+.markdown pre { margin:7px 0; padding:10px 12px; overflow:auto; background:var(--sunken);
+                border:1px solid var(--rule-soft); border-radius:var(--radius-sm); white-space:pre; }
+.markdown pre code { padding:0; background:none; border-radius:0; white-space:inherit; overflow-wrap:normal; }
+.markdown a, .accept a, .linklist a { color:var(--accent); text-decoration:underline;
+                                     text-underline-offset:2px; }
+.markdown a:focus-visible, .accept a:focus-visible, .linklist a:focus-visible {
+  outline:2px solid var(--accent); outline-offset:2px; border-radius:2px;
+}
+
+.notes { display:flex; flex-direction:column; gap:0; overflow:hidden;
+  background:var(--surface); border:1px solid var(--rule); border-radius:var(--radius-lg);
+  box-shadow:0 1px 2px rgba(0,0,0,.04); }
+.category-index { display:flex; flex-wrap:wrap; gap:4px; padding:5px; background:var(--chrome);
+                  border:1px solid var(--rule); border-radius:var(--radius-md); }
+.category-index a { display:inline-flex; gap:6px; align-items:center; color:var(--ink-muted);
+                    text-decoration:none; font-size:11.5px; border:0;
+                    border-radius:var(--radius-sm); padding:3px 8px; background:transparent; }
+.category-index a:hover { color:var(--ink); background:rgba(0,0,0,.05); }
+.category-index a[hidden] { display:none; }
+.category-index a:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.category-index b { color:var(--ink-faint); font-family:var(--mono); font-weight:500; }
+.note-groups { display:flex; flex-direction:column; gap:12px; }
+.note-group { display:flex; flex-direction:column; gap:9px; scroll-margin-top:82px; }
+.note-group[hidden] { display:none; }
+.note-group-head { display:flex; align-items:baseline; gap:9px; padding:6px 2px; cursor:pointer; }
+.note-group-head::before { align-self:center; margin-right:-2px; }
+.note-group-head:hover h3 { color:var(--accent); }
+.note-group-head:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.note-group-head h3 { margin:0; font-size:14px; font-weight:650; }
+.note-group-head span { font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); }
+.note-group > .notes, .note-group > .linklist { margin-top:9px; }
+.note { background:var(--surface); border:0; border-bottom:1px solid var(--rule-soft);
+        border-radius:0; padding:0; display:block; }
+.note:last-child { border-bottom:0; }
+.note:hover { background:rgba(0,0,0,.02); }
 .note.risk { border-left:3px solid var(--alert); }
-.note h4 { margin:0; font-size:13.5px; font-weight:620; }
-.note p { margin:0; font-family:var(--serif); font-size:14px; line-height:1.6; color:var(--ink-muted); }
+.note[id] { scroll-margin-top:18px; }
+.note-summary { min-height:42px; padding:7px 13px 7px 0; display:grid;
+  grid-template-columns:48px minmax(0,1fr); align-items:center; cursor:pointer; }
+.note-summary::before { grid-column:1; justify-self:center; margin:0; }
+.note-summary .note-title { grid-column:2; }
+.note-summary:hover .note-heading { color:var(--accent); }
+.note-summary:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.note-content { padding:0 13px 11px 48px; display:flex; flex-direction:column; gap:5px; }
+.note-aside { display:flex; flex-direction:column; gap:5px; min-width:0; }
+.note-title { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
+.note-heading { min-width:0; flex:1 1 180px; font-size:13.5px; font-weight:620; }
+.note-id { font-family:var(--mono); font-size:11px; color:var(--ink-faint); white-space:nowrap; }
+.note p { margin:0; min-width:0; overflow-wrap:anywhere; font-family:var(--sans); font-size:13.5px;
+          line-height:1.65; color:var(--ink); }
 .note .metric { font-family:var(--mono); font-size:11.5px; font-variant-numeric:tabular-nums; color:var(--accent); }
 .note .overturns { font-family:var(--mono); font-size:11px; color:var(--ink-faint); }
-.note.superseded { grid-column:1/-1; background:var(--sunken); border-style:dashed; padding:9px 14px; }
-.note.superseded summary { cursor:pointer; font-size:13px; color:var(--ink-faint); list-style-position:outside; }
-.note.superseded summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
-.note.superseded .tag { font-family:var(--mono); font-size:10.5px; letter-spacing:.05em;
-                        color:var(--alert); border:1px solid var(--rule); border-radius:2px;
-                        padding:1px 6px; margin-right:7px; white-space:nowrap; }
-.note.superseded p { margin-top:8px; font-size:13.5px; }
-.linklist { display:flex; flex-direction:column; gap:5px; font-size:13.5px; color:var(--ink-muted); }
+.note.long { grid-column:1/-1; }
+.note.long .note-content { display:grid;
+  grid-template-columns:minmax(240px,.75fr) minmax(0,1.8fr); gap:8px 26px; align-items:start; }
+.note.long .note-aside { grid-column:1; grid-row:1; }
+.note.long .note-content > .markdown { grid-column:2; grid-row:1; max-width:82ch;
+                                      border-left:1px solid var(--rule-soft); padding-left:22px; }
+.note-ref { color:inherit; text-decoration:none; text-underline-offset:2px; }
+.note-ref:hover { color:var(--accent); text-decoration:underline; }
+.note-ref:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:2px; }
+.note.superseded { grid-column:1/-1; background:var(--chrome); border:0; padding:0; }
+.note-filter-wrapper { grid-column:1/-1; border-bottom:1px solid var(--rule-soft); }
+.note-filter-wrapper:last-child { border-bottom:0; }
+.note.superseded .note-summary { color:var(--ink-faint); }
+.note.superseded .tag { display:inline-block; font-family:var(--mono); font-size:10px;
+                        letter-spacing:.03em; color:var(--alert); background:var(--alert-soft);
+                        border-radius:999px; padding:2px 8px; margin-right:8px;
+                        white-space:nowrap; vertical-align:1px; }
+.note.superseded .tag:hover { color:var(--alert); text-decoration:underline; text-underline-offset:2px; }
+.note.superseded .markdown { font-size:13.5px; }
+@media (max-width:760px) {
+  .note.long { display:flex; }
+  .note.long > .markdown { max-width:none; border-left:0; padding-left:0; }
+}
+.linklist { display:flex; flex-direction:column; gap:0; overflow:hidden; font-size:13px;
+  color:var(--ink-muted); background:var(--surface); border:1px solid var(--rule);
+  border-radius:var(--radius-lg); box-shadow:0 1px 2px rgba(0,0,0,.04); }
+.linklist > div { padding:8px 11px; border-bottom:1px solid var(--rule-soft); }
+.linklist > div:last-child { border-bottom:0; }
 .linklist code { font-family:var(--mono); font-size:12.5px; background:var(--sunken); padding:1px 5px;
-                 border-radius:2px; color:var(--ink); overflow-wrap:anywhere; }
+                 border-radius:5px; color:var(--ink); overflow-wrap:anywhere; }
 .empty { font-size:13.5px; color:var(--ink-faint); }
 footer { border-top:1px solid var(--rule); padding-top:14px; font-family:var(--mono); font-size:11.5px;
          color:var(--ink-faint); display:flex; flex-wrap:wrap; gap:6px 20px; }
+
+dialog { position:fixed; inset:0 0 0 auto; width:min(480px,100vw); height:100dvh; max-height:none;
+  max-width:none; margin:0; padding:0; border:0; border-left:1px solid var(--rule); border-radius:0; color:var(--ink);
+  background:var(--surface); box-shadow:var(--inspector-shadow); }
+dialog[open] { animation:inspector-in .16s ease-out; }
+@keyframes inspector-in { from { transform:translateX(18px); opacity:.6; } to { transform:none; opacity:1; } }
+@media (prefers-reduced-motion: reduce) { dialog[open] { animation:none; } }
+dialog::backdrop { background:rgba(0,0,0,.07); backdrop-filter:none; }
+.dialog-shell { display:flex; flex-direction:column; height:100%; max-height:none; }
+.dialog-head { display:flex; gap:12px; align-items:flex-start; padding:17px 19px 12px;
+  background:var(--chrome); border-bottom:1px solid var(--rule); }
+.dialog-head > div { flex:1; min-width:0; }
+.dialog-head h2 { margin:0; font-size:19px; line-height:1.35; }
+.dialog-head .meta { font-family:var(--mono); font-size:11px; color:var(--ink-faint); margin-top:4px; }
+.dialog-body { flex:1; padding:16px 19px; overflow:auto; display:flex; flex-direction:column; gap:15px; }
+.dialog-body h3 { margin:0 0 5px; font-size:12px; color:var(--ink-faint);
+  font-family:var(--mono); letter-spacing:.06em; text-transform:uppercase; }
+.dialog-actions { display:flex; flex-wrap:wrap; gap:8px; padding:12px 19px 17px;
+  background:var(--chrome); border-top:1px solid var(--rule); }
+.detail-grid { display:grid; grid-template-columns:1fr; gap:6px;
+  font-size:12.5px; color:var(--ink-muted); }
+.detail-grid > div { display:grid; grid-template-columns:58px minmax(0,1fr); gap:8px; }
+.detail-grid b { color:var(--ink); font-weight:600; }
+.event-list { display:flex; flex-direction:column; gap:7px; }
+.event { display:grid; grid-template-columns:156px minmax(0,1fr); gap:10px; font-size:11.5px;
+  border-top:1px solid var(--rule-soft); padding-top:7px; }
+.event time { font-family:var(--mono); font-size:10px; color:var(--ink-faint); white-space:nowrap; }
+.event code { white-space:pre-wrap; overflow-wrap:anywhere; color:var(--ink-muted); }
+.create-form { display:flex; flex-direction:column; gap:11px; }
+.create-form label { display:flex; flex-direction:column; gap:4px; font-size:12px;
+  color:var(--ink-muted); }
+.create-form textarea { min-height:116px; resize:vertical; }
+.create-form select[multiple] { min-height:88px; }
+.field-hint { font-size:10.5px; color:var(--ink-faint); }
+.form-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:11px; }
+[data-task-only][hidden], [data-finding-only][hidden] { display:none; }
+.form-error { min-height:1.4em; color:var(--alert); font-size:12.5px; }
+@media (max-width:620px) {
+  .masthead { position:static; min-height:auto; padding:9px 12px; flex-wrap:wrap; }
+  .masthead .eyebrow { display:none; }
+  .meta-line { flex-basis:100%; margin-left:0; justify-content:flex-start; overflow:hidden; }
+  .meta-line span:nth-child(n+3) { display:none; }
+  .toolbar { position:static; padding:7px 10px; }
+  .toolbar .search { flex:1 1 100%; }
+  .toolbar select { flex:1 1 calc(50% - 4px); }
+  .toolbar input, .toolbar select, .toolbar button.action { min-height:34px; }
+  .workspace { display:block; }
+  .navigator { position:static; height:auto; padding:8px 10px; border-right:0; border-bottom:1px solid var(--rule); }
+  .navigator-head { padding:0 2px 6px; }
+  .overview { flex-direction:row; overflow-x:auto; gap:6px; padding-bottom:2px;
+    scroll-snap-type:x proximity; scrollbar-width:none; }
+  .overview::-webkit-scrollbar { display:none; }
+  .pcard { flex:0 0 210px; scroll-snap-align:start; background:var(--surface); border:1px solid var(--rule); }
+  .pcard[aria-pressed="true"] { border-color:var(--accent); }
+  .ptasks { display:none; }
+  .content { padding:18px 12px 48px; gap:24px; }
+  .sec-head .key { flex-basis:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .step { grid-template-columns:42px minmax(0,1fr); }
+  .node { width:42px; }
+  .note-summary { grid-template-columns:42px minmax(0,1fr); }
+  .note-content { padding-left:42px; }
+  .note.long .note-content { grid-template-columns:1fr; }
+  .note.long .note-aside, .note.long .note-content > .markdown { grid-column:1; grid-row:auto; }
+  .note.long .note-content > .markdown { border-left:0; padding-left:0; }
+  .done-fold summary, .active-fold summary, .blocked-fold summary, .dropped-fold summary {
+    grid-template-columns:42px minmax(0,1fr); }
+  .done-fold > .step, .active-fold > .step,
+  .blocked-fold > .step, .dropped-fold > .step {
+    grid-template-columns:56px minmax(0,1fr); }
+  .done-fold > .step > .node, .active-fold > .step > .node,
+  .blocked-fold > .step > .node, .dropped-fold > .step > .node { width:56px; }
+  dialog { inset:0; width:auto; }
+  .detail-grid, .form-row { grid-template-columns:1fr; }
+  .event { grid-template-columns:1fr; gap:2px; }
+}
 """
 
 FILTER_SCRIPT = """
@@ -173,32 +494,637 @@ FILTER_SCRIPT = """
   if (!overview || !note) return;
   var cards = Array.prototype.slice.call(overview.querySelectorAll('.pcard'));
   var sections = Array.prototype.slice.call(document.querySelectorAll('section[data-project]'));
-  if (cards.length < 2) return;   // 只有一个项目时没有可切换的对象
+  var controls = document.querySelector('.toolbar');
+  var query = controls && controls.querySelector('[name="query"]');
+  var status = controls && controls.querySelector('[name="status"]');
+  var owner = controls && controls.querySelector('[name="owner"]');
+  var empty = document.querySelector('.filter-empty');
+  var selectedProject = null;
+  var canSwitchProject = cards.length >= 2; // “全部需求”之外至少还有一个需求
+  var taskDisclosures = Array.prototype.slice.call(document.querySelectorAll('.task-disclosure'));
 
-  function apply(key) {
-    cards.forEach(function (card) {
-      card.setAttribute('aria-pressed', String(card.dataset.project === key));
+  function setTaskExpanded(button, expanded) {
+    var step = button.closest('.step');
+    var body = step && step.querySelector('.task-body');
+    if (!body) return;
+    body.hidden = !expanded;
+    button.setAttribute('aria-expanded', String(expanded));
+    button.setAttribute('aria-label', (expanded ? '收起 #' : '展开 #') + step.dataset.ref + ' 全文');
+  }
+
+  function expandStepBody(step) {
+    var button = step && step.querySelector('.task-disclosure');
+    if (button) setTaskExpanded(button, true);
+  }
+
+  taskDisclosures.forEach(function (button) {
+    button.addEventListener('click', function () {
+      setTaskExpanded(button, button.getAttribute('aria-expanded') !== 'true');
     });
+  });
+
+  // 搜索高亮:先拆掉旧的 <mark>,再在仍可见的条目里包裹新匹配。
+  // 逐文本节点处理,不碰 innerHTML,避免破坏已渲染的 code/strong/a 标签。
+  function clearHighlights() {
+    document.querySelectorAll('mark[data-hl]').forEach(function (mark) {
+      mark.replaceWith(document.createTextNode(mark.textContent));
+    });
+    document.body.normalize(); // 合并相邻文本节点,跨节点的匹配才不会漏
+  }
+
+  function highlightText(root, needle) {
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    var targets = [];
+    while (walker.nextNode()) {
+      if (walker.currentNode.nodeValue.toLowerCase().indexOf(needle) !== -1) {
+        targets.push(walker.currentNode);
+      }
+    }
+    targets.forEach(function (node) {
+      var text = node.nodeValue;
+      var lower = text.toLowerCase();
+      var frag = document.createDocumentFragment();
+      var pos = 0;
+      var hit = lower.indexOf(needle);
+      while (hit !== -1) {
+        if (hit > pos) frag.appendChild(document.createTextNode(text.slice(pos, hit)));
+        var mark = document.createElement('mark');
+        mark.setAttribute('data-hl', '');
+        mark.textContent = text.slice(hit, hit + needle.length);
+        frag.appendChild(mark);
+        pos = hit + needle.length;
+        hit = lower.indexOf(needle, pos);
+      }
+      frag.appendChild(document.createTextNode(text.slice(pos)));
+      node.parentNode.replaceChild(frag, node);
+    });
+  }
+
+  function highlightVisible(needle) {
+    clearHighlights();
+    if (!needle) return;
     sections.forEach(function (section) {
-      section.hidden = Boolean(key) && section.dataset.project !== key;
+      if (section.hidden) return;
+      section.querySelectorAll('[data-filter-item]:not([hidden])').forEach(function (item) {
+        highlightText(item, needle);
+      });
     });
-    if (key) {
+  }
+
+  function apply() {
+    var needle = query ? query.value.trim().toLowerCase() : '';
+    var statusValue = status ? status.value : 'all';
+    var ownerValue = owner ? owner.value : 'all';
+    cards.forEach(function (card) {
+      var selected = selectedProject
+        ? card.dataset.project === selectedProject
+        : card.dataset.project === '';
+      card.setAttribute('aria-pressed', String(selected));
+      var group = card.parentNode;
+      if (group && group.classList && group.classList.contains('pgroup')) {
+        group.toggleAttribute('data-selected', selected);
+      }
+    });
+    var visibleItems = 0;
+    sections.forEach(function (section) {
+      var projectMatches = !selectedProject || section.dataset.project === selectedProject;
+      var sectionItems = Array.prototype.slice.call(section.querySelectorAll('[data-filter-item]'));
+      var sectionVisible = 0;
+      sectionItems.forEach(function (item) {
+        var matches = projectMatches;
+        if (needle && (item.dataset.search || '').indexOf(needle) === -1) matches = false;
+        if (statusValue !== 'all') {
+          if (!item.dataset.status) matches = false;
+          else if (statusValue === 'actionable') matches = matches && item.dataset.actionable === 'true';
+          else matches = matches && item.dataset.status === statusValue;
+        }
+        if (ownerValue !== 'all') matches = matches && item.dataset.owner === ownerValue;
+        item.hidden = !matches;
+        if (matches) sectionVisible += 1;
+      });
+      section.hidden = !projectMatches || (sectionItems.length > 0 && sectionVisible === 0);
+      visibleItems += sectionVisible;
+      var revealFoldedTasks = Boolean(needle || statusValue !== 'all' || ownerValue !== 'all');
+      if (revealFoldedTasks) {
+        section.querySelectorAll('.active-fold, .done-fold, .blocked-fold, .dropped-fold').forEach(function (fold) {
+          fold.open = Boolean(fold.querySelector('.step:not([hidden])'));
+        });
+      }
+      section.querySelectorAll('.note-group').forEach(function (group) {
+        group.hidden = !group.querySelector('[data-filter-item]:not([hidden])');
+        if (needle && !group.hidden) group.open = true;
+      });
+      if (needle) {
+        section.querySelectorAll('details.note').forEach(function (note) {
+          var filterItem = note.matches('[data-filter-item]')
+            ? note : note.closest('[data-filter-item]');
+          if (filterItem && !filterItem.hidden) note.open = true;
+        });
+      }
+      section.querySelectorAll('.category-index a').forEach(function (link) {
+        var group = document.getElementById(link.getAttribute('href').slice(1));
+        link.hidden = Boolean(group && group.hidden);
+      });
+    });
+    if (selectedProject) {
       overview.setAttribute('data-filtered', '');
       note.setAttribute('data-on', '');
-      note.querySelector('span').textContent = '只看 ' + key;
+      note.querySelector('span').textContent = '只看 ' + selectedProject;
     } else {
       overview.removeAttribute('data-filtered');
       note.removeAttribute('data-on');
     }
+    var hasFilter = Boolean(selectedProject || needle || statusValue !== 'all' || ownerValue !== 'all');
+    if (empty) empty.toggleAttribute('data-on', hasFilter && visibleItems === 0);
+    if (needle) {
+      sections.forEach(function (section) {
+        if (section.hidden) return;
+        section.querySelectorAll('.step:not([hidden])').forEach(expandStepBody);
+      });
+    }
+    highlightVisible(needle);
+  }
+
+  function clearTaskCurrent() {
+    overview.querySelectorAll('.ptask[aria-current]').forEach(function (row) {
+      row.removeAttribute('aria-current');
+    });
   }
 
   cards.forEach(function (card) {
+    if (!canSwitchProject) return;
     card.addEventListener('click', function () {
       var already = card.getAttribute('aria-pressed') === 'true';
-      apply(already ? null : card.dataset.project);   // 再点一次回到全部
+      selectedProject = already ? null : (card.dataset.project || null);
+      clearTaskCurrent();
+      apply();
     });
   });
-  note.querySelector('button').addEventListener('click', function () { apply(null); });
+  note.querySelector('button').addEventListener('click', function () {
+    selectedProject = null;
+    clearTaskCurrent();
+    apply();
+  });
+
+  // 大纲任务行:选中所属项目并滚动定位到右侧卡片,闪烁一下给出落点。
+  overview.querySelectorAll('.ptask').forEach(function (row) {
+    row.addEventListener('click', function () {
+      var key = row.dataset.project || null;
+      if (canSwitchProject && selectedProject !== key) {
+        selectedProject = key;
+        apply();
+      }
+      clearTaskCurrent();
+      row.setAttribute('aria-current', 'true');
+      var ref = row.dataset.ref;
+      if (!ref) return; // “还有 N 项”只负责选中项目
+      var step = document.querySelector(
+        'section[data-project="' + key + '"] .step[data-ref="' + ref + '"]');
+      if (!step) return;
+      var fold = step.closest('details'); // 目标可能收在“还有 N 项进行中”里
+      if (fold) fold.open = true;
+      expandStepBody(step);
+      step.scrollIntoView({block:'center', behavior:'smooth'});
+      step.classList.remove('flash');
+      void step.offsetWidth; // 重置动画,连点同一行也能再闪
+      step.classList.add('flash');
+    });
+  });
+  [query, status, owner].forEach(function (control) {
+    if (control) control.addEventListener(control === query ? 'input' : 'change', apply);
+  });
+  document.querySelectorAll('.category-index a').forEach(function (link) {
+    link.addEventListener('click', function () {
+      var group = document.getElementById(link.getAttribute('href').slice(1));
+      if (group) group.open = true;
+    });
+  });
+
+  // 侧边栏项目卡:拖动排序与置顶。偏好的唯一事实源是库旁的 *.view.json,
+  // 由导出/serve 在渲染时嵌入本页;localStorage 只是无写入通道时的降级缓存。
+  var ORDER_KEY = 'taskboard:order';
+  var PIN_KEY = 'taskboard:pinned';
+  var embeddedView = (window.__BOARD_VIEW__ && typeof window.__BOARD_VIEW__ === 'object')
+    ? window.__BOARD_VIEW__ : {};
+
+  function prefField(key) { return key === ORDER_KEY ? 'order' : 'pinned'; }
+
+  function validList(value) {
+    if (!Array.isArray(value)) return [];
+    return value.filter(function (item) { return typeof item === 'string'; });
+  }
+
+  function readList(key) {
+    var field = prefField(key);
+    if (Object.prototype.hasOwnProperty.call(embeddedView, field)) return validList(embeddedView[field]);
+    try {
+      return validList(JSON.parse(localStorage.getItem(key) || '[]'));
+    } catch (error) { return []; }
+  }
+  function writeList(key, value) {
+    embeddedView[prefField(key)] = value;
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (error) { /* 隐私模式等场景静默 */ }
+    persistView();
+  }
+
+  function persistView() {
+    var payload = {order: readList(ORDER_KEY), pinned: readList(PIN_KEY)};
+    var handlers = window.webkit && window.webkit.messageHandlers;
+    if (handlers && handlers.boardView) { // macOS 菜单栏 App:原生桥直接落盘
+      try { handlers.boardView.postMessage(payload); return; } catch (error) { /* 落到 serve 通道 */ }
+    }
+    var root = document.querySelector('.wrap[data-write]'); // board serve 本机可写
+    if (root && root.dataset.csrf) {
+      fetch('/api/view', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-Taskboard-CSRF': root.dataset.csrf},
+        body: JSON.stringify(payload)
+      }).catch(function () { /* 已降级 localStorage,下次写入再补 */ });
+    }
+  }
+
+  function sortableGroups() {
+    return Array.prototype.slice.call(overview.querySelectorAll('.pgroup[data-project]'));
+  }
+
+  function applySidebarPrefs() {
+    var order = readList(ORDER_KEY);
+    var pinned = readList(PIN_KEY);
+    var items = sortableGroups();
+    var rank = {};
+    order.forEach(function (key, index) { rank[key] = index; });
+    var fallback = order.length;
+    items.sort(function (a, b) {
+      var aPinned = pinned.indexOf(a.dataset.project) !== -1;
+      var bPinned = pinned.indexOf(b.dataset.project) !== -1;
+      if (aPinned !== bPinned) return aPinned ? -1 : 1;
+      var aRank = Object.prototype.hasOwnProperty.call(rank, a.dataset.project) ? rank[a.dataset.project] : fallback + items.indexOf(a);
+      var bRank = Object.prototype.hasOwnProperty.call(rank, b.dataset.project) ? rank[b.dataset.project] : fallback + items.indexOf(b);
+      return aRank - bRank;
+    });
+    items.forEach(function (group) {
+      overview.appendChild(group);
+      var card = group.querySelector('.pcard');
+      if (card) card.classList.toggle('pinned', pinned.indexOf(group.dataset.project) !== -1);
+    });
+  }
+
+  function rememberOrder() {
+    writeList(ORDER_KEY, sortableGroups().map(function (group) { return group.dataset.project; }));
+  }
+
+  if (sortableGroups().length >= 2) {
+    sortableGroups().forEach(function (group) {
+      var card = group.querySelector('.pcard');
+      if (!card) return;
+      card.draggable = true;
+      var pin = document.createElement('button');
+      pin.type = 'button';
+      pin.className = 'pin-button';
+      pin.title = '置顶';
+      pin.setAttribute('aria-label', '置顶 ' + group.dataset.project);
+      pin.innerHTML = '<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true"><g transform="rotate(45 6 6)" fill="currentColor"><circle cx="6" cy="3.1" r="1.8"/><rect x="5.3" y="4.2" width="1.4" height="5.6" rx=".7"/></g></svg>';
+      pin.addEventListener('click', function (event) {
+        event.stopPropagation();
+        var pinned = readList(PIN_KEY);
+        var key = group.dataset.project;
+        var at = pinned.indexOf(key);
+        if (at === -1) pinned.push(key); else pinned.splice(at, 1);
+        writeList(PIN_KEY, pinned);
+        applySidebarPrefs();
+      });
+      card.appendChild(pin);
+
+      card.addEventListener('dragstart', function (event) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', group.dataset.project);
+        card.classList.add('dragging');
+      });
+      card.addEventListener('dragend', function () {
+        card.classList.remove('dragging');
+      });
+      // 拖动目标是整个大纲组:悬停在任务行上也要能落位
+      group.addEventListener('dragover', function (event) {
+        event.preventDefault();
+        var dragging = overview.querySelector('.dragging');
+        if (!dragging || dragging.parentNode === group) return;
+        var rect = group.getBoundingClientRect();
+        if (event.clientY < rect.top + rect.height / 2) overview.insertBefore(dragging.parentNode, group);
+        else overview.insertBefore(dragging.parentNode, group.nextSibling);
+      });
+      group.addEventListener('drop', function (event) {
+        event.preventDefault();
+        rememberOrder();
+        applySidebarPrefs(); // 拖动跨过置顶边界时重新分组
+      });
+    });
+  }
+  applySidebarPrefs();
+  apply();
+})();
+</script>
+"""
+
+INTERACTIVE_SCRIPT = """
+<script>
+(function () {
+  var root = document.querySelector('.wrap[data-csrf]');
+  if (!root) return;
+  var csrf = root.dataset.csrf;
+  var detailDialog = document.getElementById('task-detail');
+  var detailBody = detailDialog.querySelector('.dialog-body');
+  var detailTitle = detailDialog.querySelector('h2');
+  var detailMeta = detailDialog.querySelector('.meta');
+  var detailActions = detailDialog.querySelector('.dialog-actions');
+  var createDialog = document.getElementById('create-dialog');
+  var createForm = createDialog ? createDialog.querySelector('form') : null;
+  var createError = createDialog ? createDialog.querySelector('.form-error') : null;
+  var categoryMap = createForm ? JSON.parse(createForm.dataset.categories || '{}') : {};
+  var repositoryMap = createForm ? JSON.parse(createForm.dataset.repositories || '{}') : {};
+  var current = null;
+
+  async function setStatus(target, status) {
+    if (status === 'done') {
+      var accept = target.dataset.accept ? '\\n\\n验收条件：' + target.dataset.accept : '';
+      if (!confirm('确认将 #' + target.dataset.ref + ' 标记为已完成？' + accept)) return;
+    }
+    try {
+      await api('/api/tasks/' + encodeURIComponent(target.dataset.project) + '/' + target.dataset.ref + '/status', {
+        method: 'POST', body: JSON.stringify({status: status})
+      });
+      location.reload();
+    } catch (error) {
+      alert(error.message);
+    }
+  }
+  window.__boardSetStatus = setStatus; // 状态菜单 UI 在 STATUS_MENU_SCRIPT,写库动作由这里提供
+
+  function element(tag, className, text) {
+    var node = document.createElement(tag);
+    if (className) node.className = className;
+    if (text !== undefined) node.textContent = text;
+    return node;
+  }
+
+  function formatUtc8(value) {
+    if (!value) return '—';
+    var parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return value;
+    return new Date(parsed.getTime() + 8 * 60 * 60 * 1000)
+      .toISOString().slice(0, 16).replace('T', ' ') + ' UTC+8';
+  }
+
+  async function api(path, options) {
+    var opts = options || {};
+    opts.headers = Object.assign({}, opts.headers || {}, {
+      'Content-Type': 'application/json', 'X-Taskboard-CSRF': csrf
+    });
+    var response = await fetch(path, opts);
+    var value = await response.json().catch(function () { return {error: '响应格式错误'}; });
+    if (!response.ok) throw new Error(value.error || ('请求失败 ' + response.status));
+    return value;
+  }
+
+  function addBlock(title, content, htmlContent) {
+    if (!content) return;
+    var block = element('div');
+    block.appendChild(element('h3', '', title));
+    var copy = element('div', 'markdown');
+    if (htmlContent) copy.innerHTML = content;
+    else copy.textContent = content;
+    block.appendChild(copy);
+    detailBody.appendChild(block);
+  }
+
+  function updateCategoryOptions() {
+    if (!createForm) return;
+    var list = createForm.querySelector('#finding-categories');
+    var project = createForm.elements.project.value;
+    list.replaceChildren();
+    (categoryMap[project] || []).forEach(function (category) {
+      var option = document.createElement('option');
+      option.value = category;
+      list.appendChild(option);
+    });
+  }
+
+  function updateRepositoryOptions() {
+    if (!createForm) return;
+    var select = createForm.elements.repositories;
+    if (!select) return;
+    var repositories = repositoryMap[createForm.elements.project.value] || [];
+    select.replaceChildren();
+    repositories.forEach(function (repository) {
+      var option = document.createElement('option');
+      option.value = repository.name;
+      option.textContent = repository.name;
+      option.selected = repositories.length === 1;
+      select.appendChild(option);
+    });
+    select.required = repositories.length > 0;
+    select.closest('label').hidden = repositories.length === 0;
+  }
+
+  async function openDetail(button) {
+    detailTitle.textContent = '读取中…';
+    detailMeta.textContent = button.dataset.project + ' #' + button.dataset.ref;
+    detailBody.replaceChildren();
+    detailActions.querySelectorAll('[data-status]').forEach(function (item) { item.disabled = true; });
+    detailDialog.showModal();
+    try {
+      current = await api('/api/tasks/' + encodeURIComponent(button.dataset.project) + '/' + button.dataset.ref);
+      var task = current.task;
+      detailTitle.textContent = task.title;
+      detailMeta.textContent = current.project.name + ' · ' + current.project.key + ' #' + task.ref;
+      var grid = element('div', 'detail-grid');
+      [['状态', task.status], ['负责人', task.owner || '未指定'], ['分支', task.branch || '—'],
+       ['PR', task.pr || '—'],
+       ['仓库', (task.repositories || []).length ? task.repositories.map(function (repo) { return repo.name; }).join(' · ') : '未关联'],
+       ['依赖', task.blocked_by.length ? '#' + task.blocked_by.join(', #') : '无'],
+       ['创建', formatUtc8(task.created_at)],
+       ['首次开始', task.first_started_at ? formatUtc8(task.first_started_at) : '尚未开始'],
+       ['最近变更', formatUtc8(task.updated_at)]].forEach(function (pair) {
+        var item = element('div');
+        var label = element('b', '', pair[0] + '：');
+        item.append(label, document.createTextNode(pair[1]));
+        grid.appendChild(item);
+      });
+      detailBody.appendChild(grid);
+      addBlock('任务说明', current.detail_html, true);
+      addBlock('验收条件', current.accept_html, true);
+      if (current.events.length) {
+        var eventsBlock = element('div');
+        eventsBlock.appendChild(element('h3', '', '最近事件'));
+        var list = element('div', 'event-list');
+        current.events.forEach(function (event) {
+          var row = element('div', 'event');
+          row.append(element('time', '', formatUtc8(event.at)),
+                     element('code', '', event.action + ' ' + JSON.stringify(event.payload)));
+          list.appendChild(row);
+        });
+        eventsBlock.appendChild(list);
+        detailBody.appendChild(eventsBlock);
+      }
+      detailActions.querySelectorAll('[data-status]').forEach(function (item) {
+        item.disabled = item.dataset.status === task.status;
+      });
+    } catch (error) {
+      detailTitle.textContent = '无法读取任务';
+      detailBody.appendChild(element('div', 'form-error', error.message));
+    }
+  }
+
+  document.addEventListener('click', function (event) {
+    var detailButton = event.target.closest('.detail-button');
+    if (detailButton) openDetail(detailButton);
+    var closeButton = event.target.closest('[data-close]');
+    if (closeButton) closeButton.closest('dialog').close();
+    var createButton = event.target.closest('[data-create]');
+    if (createButton && createForm) {
+      createForm.reset();
+      var selectedDemand = document.querySelector('.pgroup[data-selected] .pcard[data-project]');
+      if (selectedDemand && selectedDemand.dataset.project) {
+        createForm.elements.project.value = selectedDemand.dataset.project;
+      }
+      createError.textContent = '';
+      createForm.elements.kind.value = createButton.dataset.create;
+      createForm.querySelectorAll('[data-task-only]').forEach(function (node) {
+        node.hidden = createButton.dataset.create !== 'task';
+      });
+      createForm.querySelectorAll('[data-finding-only]').forEach(function (node) {
+        node.hidden = createButton.dataset.create !== 'finding';
+      });
+      createDialog.querySelector('h2').textContent = createButton.dataset.create === 'task' ? '新建任务' : '记录结论';
+      updateCategoryOptions();
+      updateRepositoryOptions();
+      createDialog.showModal();
+    }
+  });
+
+  detailActions.addEventListener('click', async function (event) {
+    var button = event.target.closest('[data-status]');
+    if (!button || !current) return;
+    if (button.dataset.status === 'done') {
+      var accept = current.task.accept ? '\\n\\n验收条件：' + current.task.accept : '';
+      if (!confirm('确认将 #' + current.task.ref + ' 标记为已完成？' + accept)) return;
+    }
+    button.disabled = true;
+    try {
+      await api('/api/tasks/' + encodeURIComponent(current.project.key) + '/' + current.task.ref + '/status', {
+        method: 'POST', body: JSON.stringify({status: button.dataset.status})
+      });
+      location.reload();
+    } catch (error) {
+      button.disabled = false;
+      alert(error.message);
+    }
+  });
+
+  if (createForm) createForm.addEventListener('submit', async function (event) {
+    event.preventDefault();
+    createError.textContent = '';
+    var data = new FormData(createForm);
+    var kind = data.get('kind');
+    var payload = {project: data.get('project'), title: data.get('title')};
+    var path;
+    if (kind === 'task') {
+      path = '/api/tasks';
+      payload.detail = data.get('body');
+      payload.owner = data.get('owner');
+      payload.accept = data.get('accept');
+      payload.repositories = data.getAll('repositories');
+    } else {
+      path = '/api/notes';
+      payload.body = data.get('body');
+      payload.metric = data.get('metric');
+      payload.category = data.get('category');
+    }
+    try {
+      await api(path, {method: 'POST', body: JSON.stringify(payload)});
+      location.reload();
+    } catch (error) {
+      createError.textContent = error.message;
+    }
+  });
+  if (createForm) createForm.elements.project.addEventListener('change', function () {
+    updateCategoryOptions();
+    updateRepositoryOptions();
+  });
+})();
+</script>
+"""
+
+STATUS_MENU_SCRIPT = """
+<script>
+(function () {
+  // 状态菜单的纯 UI 交互;真正的写库动作由 window.__boardSetStatus 提供:
+  // board serve 在 INTERACTIVE_SCRIPT 里走 /api,macOS App 在 BRIDGE_STATUS_SCRIPT 里走原生桥。
+  var statusMenu = document.getElementById('status-menu');
+  if (!statusMenu || !window.__boardSetStatus) return;
+  var statusMenuTarget = null;
+
+  function closeStatusMenu() {
+    if (statusMenuTarget) statusMenuTarget.setAttribute('aria-expanded', 'false');
+    statusMenu.hidden = true;
+    statusMenuTarget = null;
+  }
+
+  function openStatusMenu(button) {
+    statusMenuTarget = button;
+    statusMenu.querySelectorAll('[data-status]').forEach(function (item) {
+      var current = item.dataset.status === button.dataset.status;
+      item.classList.toggle('current', current);
+      item.setAttribute('aria-checked', String(current));
+    });
+    button.setAttribute('aria-expanded', 'true');
+    statusMenu.hidden = false;
+    var rect = button.getBoundingClientRect();
+    var left = Math.min(rect.left, window.innerWidth - statusMenu.offsetWidth - 8);
+    statusMenu.style.left = Math.max(8, left) + 'px';
+    statusMenu.style.top = (rect.bottom + 6) + 'px';
+  }
+
+  statusMenu.addEventListener('click', function (event) {
+    var item = event.target.closest('[data-status]');
+    if (!item || !statusMenuTarget) return;
+    var target = statusMenuTarget;
+    closeStatusMenu();
+    if (item.dataset.status !== target.dataset.status) window.__boardSetStatus(target, item.dataset.status);
+  });
+  document.addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') closeStatusMenu();
+  });
+  window.addEventListener('resize', closeStatusMenu);
+  window.addEventListener('scroll', closeStatusMenu, true);
+  document.addEventListener('click', function (event) {
+    var statusButton = event.target.closest('.status-button');
+    if (statusButton) {
+      if (!statusMenu.hidden && statusMenuTarget === statusButton) closeStatusMenu();
+      else openStatusMenu(statusButton);
+      return;
+    }
+    if (!statusMenu.hidden && !event.target.closest('#status-menu')) closeStatusMenu();
+  });
+})();
+</script>
+"""
+
+BRIDGE_STATUS_SCRIPT = """
+<script>
+(function () {
+  // macOS 菜单栏 App:状态变更经原生桥写库。Swift 跑 board CLI 改库后,
+  // 库版本号变化会触发 App 自动重新导出,本页无需自行刷新。
+  var handlers = window.webkit && window.webkit.messageHandlers;
+  if (!handlers || !handlers.boardStatus) return;
+  window.__boardSetStatus = function (target, status) {
+    if (status === 'done') {
+      var accept = target.dataset.accept ? '\\n\\n验收条件：' + target.dataset.accept : '';
+      if (!confirm('确认将 #' + target.dataset.ref + ' 标记为已完成？' + accept)) return;
+    }
+    handlers.boardStatus.postMessage({
+      project: target.dataset.project, ref: Number(target.dataset.ref), status: status
+    });
+  };
 })();
 </script>
 """
@@ -226,9 +1152,163 @@ def esc(value) -> str:
     return html.escape(str(value if value is not None else ''), quote=True)
 
 
+INLINE_CODE_RE = re.compile(r'`([^`\n]+)`')
+LINK_RE = re.compile(r'\[([^\]\n]+)\]\(([^)\n]+)\)')
+STRONG_RE = re.compile(r'\*\*([^*\n]+)\*\*')
+EMPHASIS_RE = re.compile(r'(?<!\*)\*([^*\n]+)\*(?!\*)')
+UNORDERED_ITEM_RE = re.compile(r'^\s*[-+*]\s+(.+)$')
+ORDERED_ITEM_RE = re.compile(r'^\s*\d+\.\s+(.+)$')
+HEADING_RE = re.compile(r'^(#{1,4})\s+(.+)$')
+FENCE_RE = re.compile(r'^```\s*([A-Za-z0-9_+-]*)\s*$')
+
+
+def _safe_markdown_href(value: str) -> str | None:
+    """只允许 Web/mail 链接与普通相对路径；拒绝 javascript/data 等协议。"""
+    href = html.unescape(value).strip()
+    normalized = re.sub(r'[\x00-\x20\x7f]+', '', href)
+    if not normalized or normalized.startswith('//'):
+        return None
+    scheme = urlsplit(normalized).scheme.lower()
+    return href if scheme in ('', 'http', 'https', 'mailto') else None
+
+
+def render_inline_markdown(value: str | None) -> str:
+    """渲染安全的行内 Markdown 子集；原始 HTML 始终先转义。"""
+    text = str(value or '')
+    tokens: list[str] = []
+
+    def stash(rendered: str) -> str:
+        marker = f'\ue000{len(tokens)}\ue001'
+        tokens.append(rendered)
+        return marker
+
+    text = INLINE_CODE_RE.sub(
+        lambda match: stash(f'<code>{esc(match.group(1))}</code>'), text,
+    )
+
+    def render_link(match: re.Match) -> str:
+        href = _safe_markdown_href(match.group(2))
+        if href is None:
+            return match.group(0)
+        scheme = urlsplit(href).scheme.lower()
+        external = ' target="_blank" rel="noopener noreferrer"' if scheme else ''
+        label = render_inline_markdown(match.group(1))
+        return stash(f'<a href="{esc(href)}"{external}>{label}</a>')
+
+    text = LINK_RE.sub(render_link, text)
+    rendered = esc(text)
+    rendered = STRONG_RE.sub(r'<strong>\1</strong>', rendered)
+    rendered = EMPHASIS_RE.sub(r'<em>\1</em>', rendered)
+    for index, token in enumerate(tokens):
+        rendered = rendered.replace(f'\ue000{index}\ue001', token)
+    return rendered
+
+
+def render_markdown(value: str | None) -> str:
+    """纯标准库 Markdown:段落、标题、列表、引用、代码块与安全行内格式。"""
+    lines = str(value or '').replace('\r\n', '\n').replace('\r', '\n').split('\n')
+    blocks: list[str] = []
+    paragraph: list[str] = []
+    list_kind: str | None = None
+    list_items: list[str] = []
+    quote_lines: list[str] = []
+    code_lines: list[str] = []
+    code_language = ''
+    in_code = False
+
+    def flush_paragraph() -> None:
+        if paragraph:
+            text = ' '.join(part.strip() for part in paragraph)
+            blocks.append(f'<p>{render_inline_markdown(text)}</p>')
+            paragraph.clear()
+
+    def flush_list() -> None:
+        nonlocal list_kind
+        if list_kind and list_items:
+            items = ''.join(f'<li>{render_inline_markdown(item)}</li>' for item in list_items)
+            blocks.append(f'<{list_kind}>{items}</{list_kind}>')
+        list_kind = None
+        list_items.clear()
+
+    def flush_quote() -> None:
+        if quote_lines:
+            text = ' '.join(part.strip() for part in quote_lines)
+            blocks.append(f'<blockquote><p>{render_inline_markdown(text)}</p></blockquote>')
+            quote_lines.clear()
+
+    def flush_code() -> None:
+        language = f' class="language-{esc(code_language)}"' if code_language else ''
+        blocks.append(f'<pre><code{language}>{esc(chr(10).join(code_lines))}</code></pre>')
+        code_lines.clear()
+
+    for line in lines:
+        fence = FENCE_RE.match(line)
+        if in_code:
+            if fence:
+                flush_code()
+                in_code = False
+                code_language = ''
+            else:
+                code_lines.append(line)
+            continue
+        if fence:
+            flush_paragraph()
+            flush_list()
+            flush_quote()
+            in_code = True
+            code_language = fence.group(1)
+            continue
+        if not line.strip():
+            flush_paragraph()
+            flush_list()
+            flush_quote()
+            continue
+
+        heading = HEADING_RE.match(line)
+        if heading:
+            flush_paragraph()
+            flush_list()
+            flush_quote()
+            level = 5 if len(heading.group(1)) <= 2 else 6
+            blocks.append(f'<h{level}>{render_inline_markdown(heading.group(2))}</h{level}>')
+            continue
+
+        unordered = UNORDERED_ITEM_RE.match(line)
+        ordered = ORDERED_ITEM_RE.match(line)
+        if unordered or ordered:
+            flush_paragraph()
+            flush_quote()
+            kind = 'ul' if unordered else 'ol'
+            if list_kind and list_kind != kind:
+                flush_list()
+            list_kind = kind
+            list_items.append((unordered or ordered).group(1))
+            continue
+
+        if line.lstrip().startswith('>'):
+            flush_paragraph()
+            flush_list()
+            quote_lines.append(line.lstrip()[1:].lstrip())
+            continue
+
+        flush_list()
+        flush_quote()
+        paragraph.append(line)
+
+    if in_code:
+        flush_code()
+    flush_paragraph()
+    flush_list()
+    flush_quote()
+    return ''.join(blocks)
+
+
 def _fmt_stamp(iso: str) -> str:
     try:
-        return datetime.fromisoformat(iso).strftime('%Y-%m-%d %H:%M UTC')
+        value = datetime.fromisoformat(iso)
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(UTC_PLUS_8).strftime('%Y-%m-%d %H:%M UTC+8')
     except (TypeError, ValueError):
         return iso or ''
 
@@ -241,6 +1321,12 @@ def _project_next(project: dict) -> dict | None:
         if task['actionable']:
             return task
     return None
+
+
+def _repository_tag(repository: dict, class_name: str) -> str:
+    path = repository.get('path')
+    title = f' title="{esc(path)}"' if path else ''
+    return f'<span class="{class_name}"{title}>{esc(repository["name"])}</span>'
 
 
 def _overview_card(project: dict) -> str:
@@ -257,23 +1343,73 @@ def _overview_card(project: dict) -> str:
         f'<div class="nextline"><span>闸门</span> #{", #".join(str(g) for g in project["gates"])}</div>'
         if project['gates'] else ''
     )
+    repositories = ''.join(
+        _repository_tag(repository, 'repo-tag')
+        for repository in project.get('repositories', [])
+    )
+    repository_tags = (
+        f'<div class="repo-tags" aria-label="关联仓库">{repositories}</div>'
+        if repositories else ''
+    )
     return f"""      <button type="button" class="pcard" data-project="{esc(project['key'])}" aria-pressed="false">
         <div class="key">{esc(project['key'])}</div>
         <h3>{esc(project['name'])}</h3>
+        {repository_tags}
         <div class="bar"><i class="done" style="width:{done_pct:.1f}%"></i><i class="active" style="width:{active_pct:.1f}%"></i></div>
         <div class="counts"><span>完成 <b>{counts['done']}</b></span><span>进行 <b>{counts['active']}</b></span>{f"<span>等人工 <b>{counts['waiting']}</b></span>" if counts.get('waiting') else ''}<span>待办 <b>{counts['todo']}</b></span></div>
         {next_html}{gates}
       </button>"""
 
 
-def _task_card(task: dict) -> str:
-    chips = [f'<span class="chip {task["status"]}">{STATUS_LABEL[task["status"]]}</span>']
+def _overview_group(project: dict) -> str:
+    # 侧边栏以需求/工作流为大纲节点:卡下挂“当前要动”的任务——进行中、等人工、可开工待办。
+    # 完成/已放弃/被阻塞的不进大纲,超出上限收成一行计数,保持侧边栏是速览而非清单。
+    rank = {'active': 0, 'waiting': 1, 'todo': 2}
+    focus = sorted(
+        (t for t in project['tasks']
+         if t['status'] in ('active', 'waiting') or (t['status'] == 'todo' and t['actionable'])),
+        key=lambda t: (rank[t['status']], t['ref']),
+    )
+    shown = focus[:7]
+    rest = len(focus) - len(shown)
+    rows = ''.join(
+        f'<button type="button" class="ptask" data-project="{esc(project["key"])}" '
+        f'data-ref="{t["ref"]}" title="{esc(t["title"])}"><i class="dot {t["status"]}"></i>'
+        f'<span class="ref">#{t["ref"]}</span><span class="ptitle">{esc(t["title"])}</span></button>'
+        for t in shown
+    )
+    if rest:
+        rows += (
+            f'<button type="button" class="ptask more" data-project="{esc(project["key"])}">'
+            f'还有 {rest} 项…</button>'
+        )
+    tasks_html = f'<div class="ptasks">{rows}</div>' if rows else ''
+    return (
+        f'<div class="pgroup" data-project="{esc(project["key"])}">'
+        f'{_overview_card(project)}{tasks_html}</div>'
+    )
+
+
+def _task_card(task: dict, project: str, live: bool = False,
+               status_button: bool = False, expanded: bool = False) -> str:
+    if status_button:
+        chips = [
+            f'<button type="button" class="chip {task["status"]} status-button" '
+            f'data-project="{esc(project)}" data-ref="{task["ref"]}" data-status="{task["status"]}" '
+            f'data-accept="{esc(task.get("accept") or "")}" title="点击修改状态" '
+            f'aria-haspopup="menu" aria-expanded="false">'
+            f'{STATUS_LABEL[task["status"]]}</button>'
+        ]
+    else:
+        chips = [f'<span class="chip {task["status"]}">{STATUS_LABEL[task["status"]]}</span>']
     if task['owner']:
         chips.append(f'<span class="chip who">{esc(task["owner"])}</span>')
     if task['gate'] and task['status'] != 'done':
         chips.append('<span class="chip gate">闸门</span>')
     if task['actionable'] and task['status'] == 'todo':
         chips.append('<span class="chip ready">可开工</span>')
+    for repository in task.get('repositories', []):
+        chips.append(_repository_tag(repository, 'chip repo'))
     if task.get('branch'):
         chips.append(f'<span class="chip meta">{esc(task["branch"])}</span>')
     if task.get('pr'):
@@ -287,57 +1423,256 @@ def _task_card(task: dict) -> str:
     if task['blocks']:
         dep_bits.append('阻塞 → #' + ', #'.join(str(r) for r in task['blocks']))
     dep_html = f'<div class="dep">{" · ".join(dep_bits)}</div>' if dep_bits else ''
-    detail_html = f'<p>{esc(task["detail"])}</p>' if task['detail'] else ''
+    detail_html = (
+        f'<div class="markdown card-detail">{render_markdown(task["detail"])}</div>'
+        if task['detail'] else ''
+    )
     accept_html = (
-        f'<div class="accept"><b>验收</b>{esc(task["accept"])}</div>'
+        f'<div class="accept"><b>验收</b>{render_inline_markdown(task["accept"])}</div>'
         if task.get('accept') and task['status'] != 'done' else ''
     )
+    created_at = task.get('created_at')
+    created_html = (
+        f'<time datetime="{esc(created_at)}">{esc(_fmt_stamp(created_at))}</time>'
+        if created_at else '—'
+    )
+    started_at = task.get('first_started_at')
+    started_html = (
+        f'<time datetime="{esc(started_at)}">{esc(_fmt_stamp(started_at))}</time>'
+        if started_at else '尚未开始'
+    )
+    updated_at = task.get('updated_at')
+    updated_html = (
+        f'<time datetime="{esc(updated_at)}">{esc(_fmt_stamp(updated_at))}</time>'
+        if updated_at else '—'
+    )
+    lifecycle_html = (
+        f'<div class="lifecycle" aria-label="节点时间">'
+        f'<span><b>创建</b>{created_html}</span>'
+        f'<span><b>首次开始</b>{started_html}</span>'
+        f'<span><b>最近变更</b>{updated_html}</span></div>'
+    )
+    hidden = '' if expanded else ' hidden'
+    body_html = (
+        f'<div class="task-body"{hidden}>'
+        f'{detail_html}{accept_html}{dep_html}{lifecycle_html}</div>'
+    )
+    disclosure = (
+        f'<button type="button" class="task-disclosure" aria-expanded="{str(expanded).lower()}" '
+        f'aria-label="{("收起" if expanded else "展开")} #{task["ref"]} 全文">'
+        f'<span>{task["ref"]}</span></button>'
+    )
+    search_text = ' '.join(str(task.get(field) or '') for field in (
+        'ref', 'title', 'detail', 'accept', 'owner', 'branch', 'pr'
+    )).casefold() + ' ' + ' '.join(
+        repository['name'].casefold() for repository in task.get('repositories', [])
+    )
+    detail_button = (
+        f'<button type="button" class="detail-button" data-project="{esc(project)}" '
+        f'data-ref="{task["ref"]}">详情</button>' if live else ''
+    )
 
-    return f"""        <div class="step" data-status="{task['status']}">
-          <div class="node">{task['ref']}</div>
+    return f"""        <div class="step" data-filter-item data-ref="{task['ref']}" data-status="{task['status']}" data-actionable="{str(bool(task['actionable'])).lower()}" data-owner="{esc(task.get('owner') or '')}" data-search="{esc(search_text)}">
+          <div class="node">{disclosure}</div>
           <div class="card">
-            <div class="card-top"><h3>{esc(task['title'])}</h3>{''.join(chips)}</div>
-            {detail_html}{accept_html}{dep_html}
+            <div class="card-top"><h3>{esc(task['title'])}</h3>{detail_button}{''.join(chips)}</div>
+            {body_html}
           </div>
         </div>"""
-
-
 def _note_card(note: dict, kind: str) -> str:
+    search_text = ' '.join(str(note.get(field) or '') for field in (
+        'id', 'category', 'title', 'body', 'metric'
+    )).casefold()
     if note.get('is_superseded'):
         # 折叠成一行:保留"曾经这么认为"的痕迹,但不与当前结论争夺注意力
-        return f"""      <details class="note superseded">
-        <summary><span class="tag">已被 [{note['superseded_by']}] 推翻</span> {esc(note['title'])}</summary>
-        {f'<p>{esc(note["body"])}</p>' if note.get('body') else ''}
-      </details>"""
+        return f"""      <div class="note-filter-wrapper" data-filter-item data-search="{esc(search_text)}"><details class="note superseded" id="note-{note['id']}">
+        <summary class="note-summary"><span class="note-title" role="heading" aria-level="4"><span class="note-id">[{note['id']}]</span><span class="note-heading">{esc(note['title'])}</span></span></summary>
+        <div class="note-content"><div class="note-aside"><div class="overturns"><a class="tag note-ref" href="#note-{note['superseded_by']}">已被 [{note['superseded_by']}] 推翻</a></div></div>{f'<div class="markdown">{render_markdown(note["body"])}</div>' if note.get('body') else ''}</div>
+      </details></div>"""
     metric = f'<div class="metric">{esc(note["metric"])}</div>' if note.get('metric') else ''
-    body = f'<p>{esc(note["body"])}</p>' if note.get('body') else ''
-    overturns = (
-        f'<div class="overturns">推翻了 {", ".join("[" + str(i) + "]" for i in note["supersedes"])}</div>'
-        if note.get('supersedes') else ''
+    body_text = note.get('body') or ''
+    body = f'<div class="markdown note-body">{render_markdown(body_text)}</div>' if body_text else ''
+    layout_class = ' long' if len(body_text) >= LONG_NOTE_BODY_CHARS else ''
+    overturned_refs = ', '.join(
+        f'<a class="note-ref" href="#note-{note_id}">[{note_id}]</a>'
+        for note_id in note.get('supersedes', [])
     )
-    return f"""      <div class="note {kind}">
-        <h4>{esc(note['title'])}</h4>{metric}{body}{overturns}
-      </div>"""
+    overturns = (
+        f'<div class="overturns">推翻了 {overturned_refs}</div>'
+        if overturned_refs else ''
+    )
+    return f"""      <details class="note {kind}{layout_class}" id="note-{note['id']}" data-filter-item data-search="{esc(search_text)}">
+        <summary class="note-summary"><span class="note-title" role="heading" aria-level="4"><span class="note-id">[{note['id']}]</span><span class="note-heading">{esc(note['title'])}</span></span></summary>
+        <div class="note-content"><div class="note-aside">{metric}{overturns}</div>{body}</div>
+      </details>"""
 
 
-def _project_section(project: dict) -> str:
+def _note_groups(notes: list[dict], kind: str, project_key: str) -> str:
+    """按稳定主题分组；显式分类优先，兼容旧数据的“未分类”固定沉底。"""
+    grouped: dict[str, list[dict]] = {}
+    for note in notes:
+        grouped.setdefault(note.get('category') or '未分类', []).append(note)
+    categories = sorted(grouped, key=lambda value: value == '未分类')
+    anchors = {
+        category: f'{kind}-{project_key}-category-{index}'
+        for index, category in enumerate(categories, 1)
+    }
+    index_html = ''
+    if len(categories) > 1:
+        links = ''.join(
+            f'<a href="#{esc(anchors[category])}">{esc(category)} '
+            f'<b>{len(grouped[category])}</b></a>'
+            for category in categories
+        )
+        index_html = f'<nav class="category-index" aria-label="{esc(kind)} 分类">{links}</nav>'
+    groups = []
+    for index, category in enumerate(categories):
+        cards = '\n'.join(_note_card(note, kind) for note in grouped[category])
+        groups.append(f"""      <details class="note-group" id="{esc(anchors[category])}"{' open' if index == 0 else ''}>
+        <summary class="note-group-head"><h3>{esc(category)}</h3><span>{len(grouped[category])} 条</span></summary>
+        <div class="notes">
+{cards}
+        </div>
+      </details>""")
+    return index_html + '<div class="note-groups">' + '\n'.join(groups) + '</div>'
+
+
+def _link_groups(notes: list[dict], project_key: str) -> str:
+    grouped: dict[str, list[dict]] = {}
+    for note in notes:
+        grouped.setdefault(note.get('category') or '未分类', []).append(note)
+    categories = sorted(grouped, key=lambda value: value == '未分类')
+    anchors = {
+        category: f'link-{project_key}-category-{index}'
+        for index, category in enumerate(categories, 1)
+    }
+    index_html = ''
+    if len(categories) > 1:
+        links = ''.join(
+            f'<a href="#{esc(anchors[category])}">{esc(category)} '
+            f'<b>{len(grouped[category])}</b></a>' for category in categories
+        )
+        index_html = f'<nav class="category-index" aria-label="link 分类">{links}</nav>'
+    groups = []
+    for index, category in enumerate(categories):
+        items = '\n'.join(
+            f'          <div data-filter-item data-search="{esc((str(note.get("category") or "") + " " + str(note.get("title") or "") + " " + str(note.get("body") or "")).casefold())}"><code>{esc(note["title"])}</code> {render_inline_markdown(note.get("body") or "")}</div>'
+            for note in grouped[category]
+        )
+        groups.append(f"""      <details class="note-group" id="{esc(anchors[category])}"{' open' if index == 0 else ''}>
+        <summary class="note-group-head"><h3>{esc(category)}</h3><span>{len(grouped[category])} 条</span></summary>
+        <div class="linklist">
+{items}
+        </div>
+      </details>""")
+    return index_html + '<div class="note-groups">' + '\n'.join(groups) + '</div>'
+
+
+def _project_section(project: dict, live: bool = False, status_button: bool = False) -> str:
     tasks = project['tasks']
-    # 已完成的折进一个 details:剩余路径才是每天要看的,完成项只作背景
-    live = [task for task in tasks if task['status'] != 'done']
+    # 只有一个主任务完整展开。优先取可执行 active,其次任意 active,再其次可开工 todo。
+    # 其他 active 收进折叠组,摘要只列标题,主动展开后恢复完整卡片。waiting/可开工 todo
+    # 直接给单行标题;被阻塞 todo、已放弃和已完成默认折叠,展开后也能查看完整内容。
+    open_tasks = [task for task in tasks if task['status'] != 'done']
     finished = [task for task in tasks if task['status'] == 'done']
-    spine = '\n'.join(_task_card(task) for task in live)
+    active = [task for task in open_tasks if task['status'] == 'active']
+    waiting = [task for task in open_tasks if task['status'] == 'waiting']
+    ready = [
+        task for task in open_tasks
+        if task['status'] == 'todo' and task['actionable']
+    ]
+    blocked = [
+        task for task in open_tasks
+        if task['status'] == 'todo' and not task['actionable']
+    ]
+    dropped = [task for task in open_tasks if task['status'] == 'dropped']
+    primary = next(
+        (task for task in active if task['actionable']),
+        active[0] if active else (ready[0] if ready else None),
+    )
+    primary_ref = primary['ref'] if primary else None
+    extra_active = [task for task in active if task['ref'] != primary_ref]
+    compact = list(waiting)
+    compact += [task for task in ready if task['ref'] != primary_ref]
+
+    parts = []
+    if primary:
+        parts.append(_task_card(
+            primary, project['key'], live=live, status_button=status_button,
+            expanded=True,
+        ))
+    if extra_active:
+        titles = '、'.join(
+            esc(task['title'][:18]) + ('…' if len(task['title']) > 18 else '')
+            for task in extra_active
+        )
+        rows = '\n'.join(
+            _task_card(
+                task, project['key'], live=live, status_button=status_button,
+            )
+            for task in extra_active
+        )
+        parts.append(f"""
+        <details class="active-fold">
+          <summary>还有 {len(extra_active)} 项进行中 · {titles}</summary>
+{rows}
+        </details>""")
+    parts.extend(
+        _task_card(
+            task, project['key'], live=live, status_button=status_button,
+        )
+        for task in compact
+    )
+
+    if blocked:
+        rows = '\n'.join(
+            _task_card(
+                task, project['key'], live=live, status_button=status_button,
+            )
+            for task in blocked
+        )
+        parts.append(f"""
+        <details class="blocked-fold">
+          <summary>还有 {len(blocked)} 项被阻塞待办</summary>
+{rows}
+        </details>""")
+
+    if dropped:
+        rows = '\n'.join(
+            _task_card(
+                task, project['key'], live=live, status_button=status_button,
+            )
+            for task in dropped
+        )
+        parts.append(f"""
+        <details class="dropped-fold">
+          <summary>已放弃 {len(dropped)} 项</summary>
+{rows}
+        </details>""")
+
+    spine = '\n'.join(parts)
     if finished:
-        folded = '\n'.join(_task_card(task) for task in finished)
+        folded = '\n'.join(
+            _task_card(
+                task, project['key'], live=live, status_button=status_button,
+            )
+            for task in finished
+        )
         spine += f"""
         <details class="done-fold">
           <summary>已完成 {len(finished)} 项</summary>
 {folded}
         </details>"""
     spine = spine or '<p class="empty">还没有任务。</p>'
-    blocks = [f"""    <section id="p-{esc(project['key'])}" data-project="{esc(project['key'])}">
+    repository_tags = ''.join(
+        _repository_tag(repository, 'repo-tag')
+        for repository in project.get('repositories', [])
+    )
+    blocks = [f"""    <section id="p-{esc(project['key'])}" data-project="{esc(project['key'])}" data-kind="tasks">
       <div class="sec-head">
         <h2>{esc(project['name'])}</h2>
-        <span class="key">{esc(project['key'])}{' · ' + esc(project['repo']) if project['repo'] else ''}</span>
+        <span class="key">{esc(project['key'])}</span>
+        {f'<div class="repo-tags" aria-label="关联仓库">{repository_tags}</div>' if repository_tags else ''}
         {f"<p>{esc(project['summary'])}</p>" if project['summary'] else ''}
       </div>
       <div class="spine">
@@ -346,39 +1681,118 @@ def _project_section(project: dict) -> str:
     </section>"""]
 
     if project['findings']:
-        cards = '\n'.join(_note_card(note, 'finding') for note in project['findings'])
-        blocks.append(f"""    <section data-project="{esc(project['key'])}">
+        groups = _note_groups(project['findings'], 'finding', project['key'])
+        blocks.append(f"""    <section data-project="{esc(project['key'])}" data-kind="findings">
       <div class="sec-head"><h2>约束性结论</h2><span class="key">{esc(project['key'])} · 已判定,不再推演</span></div>
-      <div class="notes">
-{cards}
-      </div>
+{groups}
     </section>""")
 
     if project['risks']:
-        cards = '\n'.join(_note_card(note, 'risk') for note in project['risks'])
-        blocks.append(f"""    <section data-project="{esc(project['key'])}">
+        groups = _note_groups(project['risks'], 'risk', project['key'])
+        blocks.append(f"""    <section data-project="{esc(project['key'])}" data-kind="risks">
       <div class="sec-head"><h2>尾巴与风险</h2><span class="key">{esc(project['key'])}</span></div>
-      <div class="notes">
-{cards}
-      </div>
+{groups}
     </section>""")
 
     if project['links']:
-        items = '\n'.join(
-            f'        <div><code>{esc(note["title"])}</code> {esc(note.get("body") or "")}</div>'
-            for note in project['links']
-        )
-        blocks.append(f"""    <section data-project="{esc(project['key'])}">
+        groups = _link_groups(project['links'], project['key'])
+        blocks.append(f"""    <section data-project="{esc(project['key'])}" data-kind="links">
       <div class="sec-head"><h2>关键文件</h2><span class="key">{esc(project['key'])}</span></div>
-      <div class="linklist">
-{items}
-      </div>
+{groups}
     </section>""")
 
     return '\n'.join(blocks)
 
 
-def render(snapshot: dict, title: str = '任务看板', live: bool = False) -> str:
+def _toolbar(projects: list[dict], write_enabled: bool) -> str:
+    owners = sorted({
+        task['owner'] for project in projects for task in project['tasks'] if task.get('owner')
+    })
+    owner_options = ''.join(f'<option value="{esc(owner)}">{esc(owner)}</option>' for owner in owners)
+    write_actions = (
+        '<button type="button" class="action primary" data-create="task">新建任务</button>'
+        '<button type="button" class="action" data-create="finding">记结论</button>'
+        if write_enabled else ''
+    )
+    return f"""  <div class="toolbar" aria-label="看板筛选与操作">
+    <input class="search" name="query" type="search" placeholder="搜索任务、正文、结论…" aria-label="搜索看板">
+    <select name="status" aria-label="按状态筛选">
+      <option value="all">全部状态</option><option value="actionable">可开工</option>
+      <option value="active">进行中</option><option value="waiting">等人工</option>
+      <option value="todo">待办</option><option value="done">已完成</option>
+    </select>
+    <select name="owner" aria-label="按负责人筛选"><option value="all">全部负责人</option>{owner_options}</select>
+    {write_actions}
+  </div>"""
+
+
+def _status_menu() -> str:
+    items = ''.join(
+        f'<button type="button" role="menuitemradio" data-status="{status}">{label}</button>'
+        for status, label in STATUS_LABEL.items() if status != 'dropped'
+    )
+    return (f'<div class="status-menu" id="status-menu" hidden role="menu" '
+            f'aria-label="修改状态">{items}</div>')
+
+
+def _dialogs(projects: list[dict], write_enabled: bool) -> str:
+    status_actions = ''
+    create_dialog = ''
+    status_menu = ''
+    if write_enabled:
+        status_actions = """
+      <button type="button" class="action" data-status="todo">转待办</button>
+      <button type="button" class="action primary" data-status="active">开始</button>
+      <button type="button" class="action" data-status="waiting">等人工</button>
+      <button type="button" class="action primary" data-status="done">完成</button>"""
+        options = ''.join(
+            f'<option value="{esc(project["key"])}">{esc(project["name"])} · {esc(project["key"])}</option>'
+            for project in projects
+        )
+        category_map = {
+            project['key']: sorted({
+                note['category'] for note in project['findings'] if note.get('category')
+            })
+            for project in projects
+        }
+        repository_map = {
+            project['key']: [
+                {'name': repository['name']} for repository in project.get('repositories', [])
+            ]
+            for project in projects
+        }
+        category_data = esc(json.dumps(category_map, ensure_ascii=False))
+        repository_data = esc(json.dumps(repository_map, ensure_ascii=False))
+        create_dialog = f"""
+  <dialog id="create-dialog">
+    <div class="dialog-shell">
+      <div class="dialog-head"><div><h2>新建任务</h2><div class="meta">支持 Markdown；复杂编辑仍建议在 Codex 对话中完成</div></div><button type="button" class="action" data-close>关闭</button></div>
+      <form class="dialog-body create-form" data-categories="{category_data}" data-repositories="{repository_data}">
+        <input type="hidden" name="kind" value="task">
+        <div class="form-row"><label>需求<select name="project" required>{options}</select></label><label>标题<input name="title" required maxlength="240"></label></div>
+        <label>正文<textarea name="body" placeholder="支持段落、列表、引用、代码块与安全链接"></textarea></label>
+        <label data-task-only>关联仓库<select name="repositories" multiple size="4"></select><span class="field-hint">多仓库需求必须明确选择本任务涉及的仓库</span></label>
+        <div class="form-row" data-task-only><label>负责人<input name="owner" placeholder="例如 我"></label><label>验收条件<input name="accept"></label></div>
+        <div class="form-row" data-finding-only hidden><label>分类<input name="category" list="finding-categories" maxlength="40" placeholder="复用本需求已有主题"><datalist id="finding-categories"></datalist></label><label>度量/证据<input name="metric"></label></div>
+        <div class="form-error" role="alert"></div>
+        <div><button type="submit" class="action primary">保存</button></div>
+      </form>
+    </div>
+  </dialog>"""
+        status_menu = _status_menu()
+    return f"""
+  <dialog id="task-detail">
+    <div class="dialog-shell">
+      <div class="dialog-head"><div><h2>任务详情</h2><div class="meta"></div></div><button type="button" class="action" data-close>关闭</button></div>
+      <div class="dialog-body"></div>
+      <div class="dialog-actions">{status_actions}<button type="button" class="action" data-close>关闭</button></div>
+    </div>
+  </dialog>{create_dialog}{status_menu}"""
+
+
+def render(snapshot: dict, title: str = '任务看板', live: bool = False,
+           csrf_token: str | None = None, write_enabled: bool = False,
+           view_prefs: dict | None = None, bridge: bool = False) -> str:
     projects = snapshot['projects']
     totals: dict[str, int] = {status: 0 for status in STATUS_LABEL}
     for project in projects:
@@ -389,39 +1803,78 @@ def render(snapshot: dict, title: str = '任务看板', live: bool = False) -> s
         1 for project in projects for task in project['tasks'] if task['actionable']
     )
 
-    overview = '\n'.join(_overview_card(project) for project in projects)
-    sections = '\n'.join(_project_section(project) for project in projects)
+    all_projects = (
+        f'<button type="button" class="pcard all-projects" data-project="" aria-pressed="true">'
+        f'<h3>全部需求</h3><div class="key">{len(projects)} 个需求</div></button>'
+        if projects else ''
+    )
+    overview = all_projects + ('\n' if all_projects else '') + '\n'.join(
+        _overview_group(project) for project in projects
+    )
+    # 状态 chip 可点击的两个场景:board serve 本机可写(走 /api)、macOS App 导出(走原生桥)
+    status_button = bool((live and write_enabled) or bridge)
+    sections = '\n'.join(
+        _project_section(project, live=live, status_button=status_button) for project in projects
+    )
     if not projects:
-        sections = '<p class="empty">还没有项目。先跑 <code>board init &lt;key&gt; --name "..." --repo .</code></p>'
+        sections = '<p class="empty">还没有需求。先确认目标和关联仓库，再运行 <code>board init &lt;key&gt; --name "..." --repo .</code></p>'
+    db_path = (
+        f'<span>{esc(snapshot["db"])}</span>'
+        if snapshot.get('db') else ''
+    )
+
+    root_attrs = f' data-csrf="{esc(csrf_token or "")}"' if live else ''
+    if live and write_enabled:
+        root_attrs += ' data-write="1"'
+    toolbar = _toolbar(projects, write_enabled=live and write_enabled)
+    dialogs = _dialogs(projects, write_enabled=write_enabled) if live else ''
+    # bridge 导出没有 _dialogs(那是 serve 的详情/新建对话框),状态菜单单独补上
+    bridge_menu = _status_menu() if bridge else ''
+    # 视图偏好嵌在 FILTER_SCRIPT 之前;replace 防止内容里的 "</" 提前闭合 <script>
+    view_script = ''
+    if view_prefs:
+        payload = json.dumps(view_prefs, ensure_ascii=False).replace('</', '<\\/')
+        view_script = f'<script>window.__BOARD_VIEW__ = {payload};</script>'
 
     return f"""<title>{esc(title)}</title>
 <style>{STYLE}</style>
-<div class="wrap">
+<div class="wrap"{root_attrs}>
   <header class="masthead">
-    <div class="eyebrow">taskboard · 跨项目进度</div>
+    <div class="eyebrow">taskboard · 持久工作流</div>
     <h1>{esc(title)}</h1>
     <div class="meta-line">
       <span>生成于 {_fmt_stamp(snapshot['generated_at'])}</span>
-      <span>{len(projects)} 个项目</span>
+      <span>{len(projects)} 个需求</span>
       <span>完成 {totals['done']} · 进行 {totals['active']}{f" · 等人工 {totals['waiting']}" if totals.get('waiting') else ''} · 待办 {totals['todo']}</span>
       <span>可开工 {actionable}{f" · 闸门 {gate_total}" if gate_total else ''}</span>
     </div>
   </header>
 
-  <div class="overview">
-{overview}
-  </div>
+{toolbar}
 
-  <div class="filter-note"><span></span><button type="button">显示全部项目</button></div>
+  <div class="workspace">
+    <aside class="navigator" aria-label="需求导航">
+      <div class="navigator-head"><span>需求</span><b>{len(projects)}</b></div>
+      <div class="overview">
+{overview}
+      </div>
+    </aside>
+
+    <main class="content">
+      <div class="filter-note"><span></span><button type="button">显示全部需求</button></div>
+      <div class="filter-empty">没有符合当前筛选条件的内容。</div>
 
 {sections}
 
-  <footer>
-    <span>board export / board serve</span>
-    <span>{esc(snapshot.get('db', ''))}</span>
-  </footer>
+      <footer>
+        <span>board export / board serve</span>
+        {db_path}
+      </footer>
+    </main>
+  </div>
 </div>
-{FILTER_SCRIPT}{LIVE_SCRIPT if live else ''}
+{dialogs}{bridge_menu}
+{view_script}{FILTER_SCRIPT}{LIVE_SCRIPT if live else ''}{INTERACTIVE_SCRIPT if live else ''}{BRIDGE_STATUS_SCRIPT if bridge else ''}{STATUS_MENU_SCRIPT if status_button else ''}
 """
 
 

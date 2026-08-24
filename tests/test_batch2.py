@@ -233,10 +233,17 @@ def test_legacy_db_gets_all_new_columns(tmp_path):
             ref INTEGER NOT NULL, title TEXT NOT NULL, detail TEXT,
             status TEXT NOT NULL DEFAULT 'todo', owner TEXT, gate INTEGER NOT NULL DEFAULT 0,
             created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (project, ref));
+        CREATE TABLE notes (id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL,
+            kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT, metric TEXT, created_at TEXT NOT NULL);
         INSERT INTO projects VALUES ('demo','老库',NULL,NULL,0,'2026-01-01','2026-01-01');
         INSERT INTO tasks (project, ref, title, created_at, updated_at)
             VALUES ('demo', 1, '老任务', '2026-01-01', '2026-01-01');
+        INSERT INTO notes (project, kind, title, created_at)
+            VALUES ('demo', 'finding', '老结论', '2026-01-01');
     """)
+    legacy_repo = tmp_path / 'legacy-repo'
+    legacy_repo.mkdir()
+    conn.execute('UPDATE projects SET repo = ? WHERE key = ?', (str(legacy_repo), 'demo'))
     conn.commit()
     conn.close()
 
@@ -245,6 +252,10 @@ def test_legacy_db_gets_all_new_columns(tmp_path):
         task = store.add_task('demo', '新任务', accept='验收条件', branch='b', pr='1')
         assert task['ref'] == 2
         assert store.get_task('demo', 1)['accept'] is None   # 老数据保持原样
+        assert store.get_note(1)['category'] is None
+        assert [repo['name'] for repo in store.project_repositories('demo')] == ['legacy-repo']
+        assert [repo['name'] for repo in store.task_repositories('demo', 1)] == ['legacy-repo']
+        assert store.set_note_category(1, '历史口径')['category'] == '历史口径'
         store.update_project('demo', artifact_url='https://example.com')
         assert store.get_project('demo')['artifact_url'] == 'https://example.com'
     finally:
@@ -287,9 +298,144 @@ def test_overview_cards_are_toggle_buttons_with_sections_tagged(tmp_path):
     assert 'section[hidden] { display:none; }' in html
 
 
-def test_single_project_needs_no_switching(tmp_path):
+def test_single_project_keeps_explicit_all_projects_context(tmp_path):
     store = Store(tmp_path / 'one.db')
     store.create_project('solo', '独苗')
     html = render(store.snapshot())
     store.close()
-    assert 'cards.length < 2' in html   # 脚本自己短路,不给单项目加无意义交互
+    assert 'class="pcard all-projects" data-project="" aria-pressed="true"' in html
+    assert '<h3>全部需求</h3><div class="key">1 个需求</div>' in html
+
+
+def test_sidebar_outline_lists_focus_tasks_under_project(tmp_path):
+    store = Store(tmp_path / 'outline.db')
+    store.create_project('alpha', '项目甲')
+    store.add_task('alpha', '已完成的不进大纲')
+    store.set_status('alpha', 1, 'done')
+    store.add_task('alpha', '被阻塞的不进大纲')
+    store.add_task('alpha', '阻塞源')
+    store.add_dep('alpha', 2, 3)
+    store.add_task('alpha', '等人工的活')
+    store.set_status('alpha', 4, 'waiting')
+    store.add_task('alpha', '进行中的活')
+    store.set_status('alpha', 5, 'active')
+    store.add_task('alpha', '可开工的待办')
+    html = render(store.snapshot())
+    store.close()
+
+    # 大纲组包着项目卡与任务行
+    assert '<div class="pgroup" data-project="alpha">' in html
+    assert 'class="ptasks"' in html
+    # 进行中 → 等人工 → 可开工待办;完成与被阻塞的不出现
+    active_at = html.index('class="ptask" data-project="alpha" data-ref="5"')
+    waiting_at = html.index('class="ptask" data-project="alpha" data-ref="4"')
+    todo_at = html.index('class="ptask" data-project="alpha" data-ref="6"')
+    assert active_at < waiting_at < todo_at
+    assert 'data-ref="1"' not in html.split('class="ptasks"')[1].split('</div>')[0]
+    assert 'data-ref="2"' not in html.split('class="ptasks"')[1].split('</div>')[0]
+    # 任务行要带状态圆点与 ref,主区卡片也要带 data-ref 才能被定位
+    assert '<i class="dot active"></i><span class="ref">#5</span>' in html
+    assert '<div class="step" data-filter-item data-ref="5"' in html
+
+
+def test_sidebar_outline_caps_rows_with_overflow_count(tmp_path):
+    store = Store(tmp_path / 'cap.db')
+    store.create_project('mega', '大项目')
+    for index in range(9):
+        store.add_task('mega', f'第 {index + 1} 件')
+    html = render(store.snapshot())
+    store.close()
+    assert html.count('class="ptask" data-project="mega"') == 7
+    assert 'class="ptask more" data-project="mega">还有 2 项…</button>' in html
+
+
+def test_secondary_active_is_folded_but_expands_to_full_cards(tmp_path):
+    store = Store(tmp_path / 'fold.db')
+    store.create_project('alpha', '项目甲')
+    store.add_task('alpha', '第一张进行中摊开', detail='主任务正文')
+    store.add_task('alpha', '第二张进行中折起', detail='第二张正文')
+    store.add_task('alpha', '第三张进行中折起', detail='第三张正文')
+    store.add_task('alpha', '普通待办')
+    for ref in (1, 2, 3):
+        store.set_status('alpha', ref, 'active')
+    html = render(store.snapshot())
+    store.close()
+
+    section = html.split('data-kind="tasks"', 1)[1]
+    ref1 = section.index('data-ref="1"')
+    ref2 = section.index('data-ref="2"')
+    ref3 = section.index('data-ref="3"')
+    ref4 = section.index('data-ref="4"')
+    fold_at = section.index('<details class="active-fold">')
+    assert ref1 < fold_at < ref2 < ref3 < ref4
+    assert '主任务正文' in section[ref1:fold_at]
+    folded_active = section[fold_at:ref4]
+    assert '还有 2 项进行中 · 第二张进行中折起、第三张进行中折起' in folded_active
+    assert '第二张正文' in folded_active and '第三张正文' in folded_active
+    assert folded_active.count('class="task-body" hidden') == 2
+    assert folded_active.count('class="task-disclosure" aria-expanded="false"') == 2
+    assert '展开全部' not in section
+    # 普通待办没有正文,默认仍收成单行；展开后可看节点生命周期。
+    assert section[ref4:].count('class="task-body" hidden') == 1
+    assert section[ref4:].count('class="task-disclosure" aria-expanded="false"') == 1
+
+
+def test_primary_active_prefers_actionable_and_secondary_is_title_only(tmp_path):
+    store = Store(tmp_path / 'active-priority.db')
+    store.create_project('alpha', '项目甲')
+    store.add_task('alpha', '未完成前置')
+    store.add_task('alpha', '被阻塞的进行中', detail='次要任务正文', blocked_by=[1])
+    store.set_status('alpha', 2, 'active')
+    store.add_task('alpha', '可执行的进行中', detail='主任务完整正文')
+    store.set_status('alpha', 3, 'active')
+    store.add_task('alpha', '被阻塞的待办', blocked_by=[1])
+    html = render(store.snapshot(), live=True)
+    store.close()
+
+    section = html.split('data-kind="tasks"', 1)[1]
+    # ref=3 虽然后创建,但可执行,必须提升为完全展开的主任务。
+    primary_at = section.index('data-ref="3"')
+    active_fold_at = section.index('<details class="active-fold">')
+    secondary_at = section.index('data-ref="2"')
+    blocked_at = section.index('<details class="blocked-fold">')
+    assert primary_at < active_fold_at < secondary_at < section.index('data-ref="1"') < blocked_at
+    assert blocked_at < section.index('data-ref="4"', blocked_at)
+    assert '主任务完整正文' in section[primary_at:secondary_at]
+
+    secondary = section[active_fold_at:section.index('data-ref="1"')]
+    assert '次要任务正文' in secondary
+    assert 'class="task-body" hidden' in secondary
+    assert 'class="task-disclosure" aria-expanded="false"' in secondary
+    assert 'class="chip active"' in secondary
+
+
+def test_waiting_ready_are_compact_and_blocked_dropped_are_folded(tmp_path):
+    store = Store(tmp_path / 'solo.db')
+    store.create_project('alpha', '项目甲')
+    store.add_task('alpha', '唯一的进行中', detail='唯一完整正文')
+    store.set_status('alpha', 1, 'active')
+    store.add_task('alpha', '等人工标题', detail='等人工正文')
+    store.set_status('alpha', 2, 'waiting')
+    store.add_task('alpha', '可开工标题', detail='可开工正文')
+    store.add_task('alpha', '被阻塞标题', detail='被阻塞正文', blocked_by=[3])
+    store.add_task('alpha', '已放弃标题', detail='已放弃正文')
+    store.set_status('alpha', 5, 'dropped')
+    html = render(store.snapshot())
+    store.close()
+
+    section = html.split('data-kind="tasks"', 1)[1]
+    assert '唯一完整正文' in section[:section.index('data-ref="2"')]
+    waiting_at = section.index('data-ref="2"')
+    ready_at = section.index('data-ref="3"')
+    blocked_at = section.index('<details class="blocked-fold">')
+    assert waiting_at < ready_at < blocked_at
+    queue = section[waiting_at:blocked_at]
+    assert '等人工正文' in queue and '可开工正文' in queue
+    assert queue.count('class="task-body" hidden') == 2
+    assert queue.count('class="task-disclosure" aria-expanded="false"') == 2
+    assert '<details class="blocked-fold">' in section
+    assert '<summary>还有 1 项被阻塞待办</summary>' in section
+    assert '被阻塞正文' in section
+    assert '<details class="dropped-fold">' in section
+    assert '<summary>已放弃 1 项</summary>' in section
+    assert '已放弃正文' in section

@@ -1,6 +1,8 @@
 import pytest
 
-from taskboard.store import BoardError, Store
+from taskboard.store import (
+    BoardError, Store, load_view_prefs, save_view_prefs, view_prefs_path,
+)
 
 
 @pytest.fixture()
@@ -65,6 +67,61 @@ def test_project_for_path_prefers_most_specific(store, tmp_path):
     assert store.project_for_path(tmp_path) is None
 
 
+def test_workstream_and_task_repository_associations(store, tmp_path):
+    backend = tmp_path / 'coinex_backend'
+    admin = tmp_path / 'coinex_admin_frontend'
+    backend.mkdir()
+    admin.mkdir()
+    store.create_project(
+        'cross-repo', '跨仓库需求', repositories=[str(backend), str(admin)],
+    )
+
+    assert [row['name'] for row in store.project_repositories('cross-repo')] == [
+        'coinex_admin_frontend', 'coinex_backend',
+    ]
+    task = store.add_task(
+        'cross-repo', '只改后端', repositories=['coinex_backend'],
+    )
+    assert [row['name'] for row in store.task_repositories('cross-repo', task['ref'])] == [
+        'coinex_backend',
+    ]
+    snapshot = next(
+        project for project in store.snapshot()['projects'] if project['key'] == 'cross-repo'
+    )
+    assert [repo['name'] for repo in snapshot['repositories']] == [
+        'coinex_admin_frontend', 'coinex_backend',
+    ]
+    assert [repo['name'] for repo in snapshot['tasks'][0]['repositories']] == [
+        'coinex_backend',
+    ]
+    reopened = Store(store.path)
+    try:
+        assert [
+            repo['name'] for repo in reopened.task_repositories('cross-repo', task['ref'])
+        ] == ['coinex_backend']
+    finally:
+        reopened.close()
+    with pytest.raises(BoardError, match='未关联到需求'):
+        store.add_task('cross-repo', '越界仓库', repositories=['unknown'])
+    with pytest.raises(BoardError, match='仍被任务'):
+        store.set_project_repositories('cross-repo', [str(admin)])
+    with pytest.raises(BoardError, match='仍被任务'):
+        store.update_project('cross-repo', repo=str(admin))
+    assert [row['name'] for row in store.project_repositories('cross-repo')] == [
+        'coinex_admin_frontend', 'coinex_backend',
+    ]
+
+
+def test_shared_repository_requires_explicit_workstream(store, tmp_path):
+    shared = tmp_path / 'shared'
+    shared.mkdir()
+    store.create_project('shared-a', '需求 A', repositories=[str(shared)])
+    store.create_project('shared-b', '需求 B', repositories=[str(shared)])
+
+    assert {row['key'] for row in store.projects_for_path(shared)} == {'shared-a', 'shared-b'}
+    assert store.project_for_path(shared) is None
+
+
 def test_dropped_tasks_are_not_actionable(store):
     task = store.add_task('demo', '放弃的')
     store.set_status('demo', task['ref'], 'dropped')
@@ -74,17 +131,23 @@ def test_dropped_tasks_are_not_actionable(store):
 
 
 def test_notes_split_by_kind_and_gates_exclude_done(store):
-    store.add_note('demo', 'finding', '结论一', body='正文', metric='40/40')
+    finding = store.add_note(
+        'demo', 'finding', '结论一', body='正文', metric='40/40', category='模型口径',
+    )
     store.add_note('demo', 'risk', '尾巴一')
     gate = store.add_task('demo', '闸门任务', gate=True)
 
     snapshot = store.snapshot()['projects'][0]
     assert [n['title'] for n in snapshot['findings']] == ['结论一']
+    assert snapshot['findings'][0]['category'] == '模型口径'
     assert [n['title'] for n in snapshot['risks']] == ['尾巴一']
     assert snapshot['gates'] == [gate['ref']]
 
     store.set_status('demo', gate['ref'], 'done')
     assert store.snapshot()['projects'][0]['gates'] == []
+
+    updated = store.set_note_category(finding['id'], '部署状态')
+    assert updated['category'] == '部署状态'
 
 
 def test_invalid_status_and_kind_rejected(store):
@@ -93,6 +156,10 @@ def test_invalid_status_and_kind_rejected(store):
         store.set_status('demo', task['ref'], 'finished')
     with pytest.raises(BoardError):
         store.add_note('demo', 'todo', '类型不对')
+    with pytest.raises(BoardError):
+        store.add_note('demo', 'finding', '分类过长', category='x' * 41)
+    with pytest.raises(BoardError):
+        store.add_note('demo', 'finding', '分类换行', category='模型\n口径')
 
 
 def test_events_are_recorded(store):
@@ -103,7 +170,45 @@ def test_events_are_recorded(store):
     assert 'task_added' in actions
 
 
+def test_snapshot_derives_first_started_at_from_event_stream(store):
+    task = store.add_task('demo', '生命周期')
+    initial = store.snapshot()['projects'][0]['tasks'][0]
+    assert initial['created_at'] == task['created_at']
+    assert initial['first_started_at'] is None
+
+    store.set_status('demo', task['ref'], 'active')
+    first_event = next(
+        event for event in reversed(store.events(limit=20, project='demo'))
+        if event['action'] == 'status_changed'
+    )
+    first_started = store.snapshot()['projects'][0]['tasks'][0]['first_started_at']
+    assert first_started == first_event['at']
+
+    store.set_status('demo', task['ref'], 'todo')
+    store.set_status('demo', task['ref'], 'active')
+    assert store.snapshot()['projects'][0]['tasks'][0]['first_started_at'] == first_started
+
+
 def test_archived_projects_hidden_by_default(store):
     store.update_project('demo', archived=1)
     assert store.snapshot()['projects'] == []
     assert len(store.snapshot(include_archived=True)['projects']) == 1
+
+
+def test_view_prefs_roundtrip_and_resilience(store, tmp_path):
+    db = tmp_path / 'board.db'
+    assert load_view_prefs(db) == {}  # sidecar 不存在
+    assert view_prefs_path(db).name == 'board.view.json'
+
+    saved = save_view_prefs(db, {'order': ['b', 'a'], 'pinned': ['a'], 'junk': ['x']})
+    assert saved == {'order': ['b', 'a'], 'pinned': ['a']}  # 未知键丢弃
+    assert load_view_prefs(db) == {'order': ['b', 'a'], 'pinned': ['a']}
+
+    saved = save_view_prefs(db, {'order': ['ok', 1, '', None], 'pinned': 'notalist'})
+    assert saved == {'order': ['ok'], 'pinned': []}  # 非法条目过滤
+    assert load_view_prefs(db) == saved
+
+    view_prefs_path(db).write_text('{oops', encoding='utf-8')
+    assert load_view_prefs(db) == {}  # 损坏 JSON 容错
+    view_prefs_path(db).write_text('[1, 2]', encoding='utf-8')
+    assert load_view_prefs(db) == {}  # 顶层非对象容错

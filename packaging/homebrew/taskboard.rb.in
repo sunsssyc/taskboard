@@ -1,0 +1,49 @@
+# typed: strict
+# frozen_string_literal: true
+
+# Installs the Taskboard CLI and its optional Agent Skill.
+class Taskboard < Formula
+  desc "Local cross-project task board for individuals and AI coding agents"
+  homepage "https://github.com/@REPOSITORY@"
+  url "@URL@"
+  sha256 "@SHA256@"
+  license "MIT"
+
+  depends_on "python@3.13"
+
+  def install
+    libexec.install "taskboard"
+
+    launcher = libexec/"board"
+    launcher.write <<~PYTHON
+      #!#{formula_opt_bin("python@3.13")}/python3.13
+      from taskboard.cli import main
+      raise SystemExit(main())
+    PYTHON
+    chmod 0755, launcher
+    bin.install_symlink launcher
+
+    (pkgshare/"skill").install Dir[".agents/skills/taskboard/*"]
+  end
+
+  def caveats
+    <<~EOS
+      The optional Agent Skill is installed at:
+        #{pkgshare}/skill
+
+      Example for Codex/Cursor-compatible discovery:
+        mkdir -p ~/.agents/skills
+        ln -sfn #{pkgshare}/skill ~/.agents/skills/taskboard
+
+      The task database remains in ~/.taskboard/board.db by default.
+    EOS
+  end
+
+  test do
+    database = testpath/"board.db"
+    system bin/"board", "--db", database, "init", "brew-test", "--name", "Brew Test"
+    system bin/"board", "--db", database, "finding", "Formula works",
+           "--category", "Packaging", "-p", "brew-test"
+    assert_match "Packaging", shell_output("#{bin}/board --db #{database} notes -p brew-test")
+  end
+end
