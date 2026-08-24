@@ -52,7 +52,10 @@ export const demoSnapshot: BoardSnapshot = {
           "验证 Tauri + Vue 桌面只读 POC",
           "active",
           "**目标**：保留 Python CLI 与 SQLite，用 Vue 重做桌面展示层。\n\n- 接入真实 `board export --json`\n- 验证搜索、折叠和启动速度",
-          { branch: "codex/tauri-vue-poc", accept: "前端构建与 Tauri 编译通过" },
+          {
+            branch: "codex/tauri-vue-poc",
+            accept: "**小批量验收（真实链路）**：\n\n- 连续多个窗口的数据可完整导出，审计列与分层计数齐全。\n- 查询结果与严格截止时间口径一致，异常状态不能进入成功终态。\n\n**大批量验收（容量与故障边界）**：\n\n- 批次满足容量、唯一性和时间边界，超时后停止提交并保留未提交计数。",
+          },
         ),
         task(
           24,

@@ -610,6 +610,33 @@ code {
 .markdown-marker { color: var(--ink-faint); }
 .markdown-gap { height: 7px; }
 
+.acceptance-block {
+  display: grid;
+  max-width: 980px;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 10px;
+  padding: 10px 12px;
+  margin-top: 12px;
+  border-left: 2px solid var(--accent);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: rgb(255 255 255 / 58%);
+}
+.acceptance-label {
+  padding-top: 1px;
+  color: var(--accent);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+}
+.acceptance-block .markdown-block {
+  max-width: none;
+  color: var(--ink-muted);
+  font-size: 12.5px;
+  line-height: 1.62;
+}
+.acceptance-block .markdown-line.is-heading,
+.acceptance-block .markdown-line strong { color: var(--ink); }
+
 .task-facts {
   display: grid;
   max-width: 900px;
@@ -803,6 +830,7 @@ code {
   .task-owner,
   .gate-chip { display: none; }
   .task-detail { padding-right: 13px; padding-left: 51px; }
+  .acceptance-block { grid-template-columns: 1fr; gap: 4px; }
   .task-facts { grid-template-columns: 1fr; }
   .panel-heading > div { align-items: flex-start; flex-direction: column; gap: 0; }
   .panel-heading .eyebrow { order: 0; }

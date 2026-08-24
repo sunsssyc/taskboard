@@ -74,11 +74,12 @@ function formatTime(value: string | null): string {
     <div v-if="expanded && hasDetails" class="task-detail">
       <MarkdownBlock v-if="task.detail" :text="task.detail" />
 
+      <div v-if="task.accept && task.status !== 'done'" class="acceptance-block">
+        <strong class="acceptance-label">验收</strong>
+        <MarkdownBlock :text="task.accept" />
+      </div>
+
       <dl class="task-facts">
-        <div v-if="task.accept">
-          <dt>验收</dt>
-          <dd>{{ task.accept }}</dd>
-        </div>
         <div v-if="task.repositories.length">
           <dt>仓库</dt>
           <dd>{{ task.repositories.map((repository) => repository.name).join(" · ") }}</dd>
