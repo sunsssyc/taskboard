@@ -1,14 +1,31 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+
+const VIEW_PREF_MAX_ITEMS: usize = 500;
+const VIEW_PREF_MAX_CHARS: usize = 200;
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Serialize)]
+struct ViewPrefs {
+    order: Vec<String>,
+    pinned: Vec<String>,
+}
+
+#[derive(Default)]
+struct BridgeState {
+    database: Mutex<Option<PathBuf>>,
+}
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct LoadBoardResponse {
     snapshot: Value,
     source: String,
+    view_prefs: ViewPrefs,
 }
 
 #[derive(Debug)]
@@ -37,6 +54,66 @@ fn export_args(database: Option<&str>) -> Vec<String> {
 
 fn development_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..")
+}
+
+fn view_prefs_path(database: &Path) -> PathBuf {
+    let stem = database
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .unwrap_or("board");
+    database.with_file_name(format!("{stem}.view.json"))
+}
+
+fn clean_pref_list(values: Vec<String>) -> Vec<String> {
+    values
+        .into_iter()
+        .take(VIEW_PREF_MAX_ITEMS)
+        .filter(|value| !value.is_empty() && !value.contains('\0'))
+        .map(|value| value.chars().take(VIEW_PREF_MAX_CHARS).collect())
+        .collect()
+}
+
+fn clean_view_prefs(prefs: ViewPrefs) -> ViewPrefs {
+    ViewPrefs {
+        order: clean_pref_list(prefs.order),
+        pinned: clean_pref_list(prefs.pinned),
+    }
+}
+
+fn load_view_prefs(database: &Path) -> ViewPrefs {
+    let Ok(bytes) = fs::read(view_prefs_path(database)) else {
+        return ViewPrefs::default();
+    };
+    serde_json::from_slice::<ViewPrefs>(&bytes)
+        .map(clean_view_prefs)
+        .unwrap_or_default()
+}
+
+fn write_view_prefs(database: &Path, prefs: ViewPrefs) -> Result<ViewPrefs, String> {
+    let cleaned = clean_view_prefs(prefs);
+    let path = view_prefs_path(database);
+    let temporary = path.with_file_name(format!(
+        "{}.next",
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("board.view.json")
+    ));
+    let mut payload = serde_json::to_vec_pretty(&cleaned)
+        .map_err(|error| format!("无法编码视图偏好：{error}"))?;
+    payload.push(b'\n');
+    fs::write(&temporary, payload)
+        .map_err(|error| format!("无法写入视图偏好 {}：{error}", temporary.display()))?;
+    fs::rename(&temporary, &path)
+        .map_err(|error| format!("无法保存视图偏好 {}：{error}", path.display()))?;
+    Ok(cleaned)
+}
+
+fn snapshot_database(snapshot: &Value) -> Option<PathBuf> {
+    snapshot
+        .get("db")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 fn command_attempts() -> Vec<CommandAttempt> {
@@ -107,16 +184,23 @@ fn execute(attempt: &CommandAttempt, database: Option<&str>) -> Result<Value, St
 }
 
 #[tauri::command]
-fn load_board() -> Result<LoadBoardResponse, String> {
+fn load_board(state: tauri::State<'_, BridgeState>) -> Result<LoadBoardResponse, String> {
     let attempts = command_attempts();
     let database = env::var("TASKBOARD_DB").ok();
     let mut errors = Vec::new();
     for attempt in attempts {
         match execute(&attempt, database.as_deref()) {
             Ok(snapshot) => {
+                let database = snapshot_database(&snapshot);
+                let view_prefs = database.as_deref().map(load_view_prefs).unwrap_or_default();
+                *state
+                    .database
+                    .lock()
+                    .map_err(|_| "无法记录当前数据库路径".to_string())? = database;
                 return Ok(LoadBoardResponse {
                     snapshot,
                     source: attempt.source,
+                    view_prefs,
                 });
             }
             Err(error) => errors.push(error),
@@ -126,10 +210,25 @@ fn load_board() -> Result<LoadBoardResponse, String> {
     Err(format!("无法读取任务看板。已尝试：\n{}", errors.join("\n")))
 }
 
+#[tauri::command]
+fn save_view_prefs(
+    state: tauri::State<'_, BridgeState>,
+    prefs: ViewPrefs,
+) -> Result<ViewPrefs, String> {
+    let database = state
+        .database
+        .lock()
+        .map_err(|_| "无法读取当前数据库路径".to_string())?
+        .clone()
+        .ok_or_else(|| "任务看板尚未载入，不能保存视图偏好".to_string())?;
+    write_view_prefs(&database, prefs)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![load_board])
+        .manage(BridgeState::default())
+        .invoke_handler(tauri::generate_handler![load_board, save_view_prefs])
         .run(tauri::generate_context!())
         .expect("error while running Taskboard desktop");
 }
@@ -198,5 +297,32 @@ mod tests {
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{}", database_text, suffix));
         }
+    }
+
+    #[test]
+    fn view_prefs_path_matches_python_sidecar_name() {
+        assert_eq!(
+            view_prefs_path(Path::new("/tmp/board.db")),
+            PathBuf::from("/tmp/board.view.json")
+        );
+    }
+
+    #[test]
+    fn view_prefs_round_trip_is_clean_and_shared() {
+        let database = env::temp_dir().join(format!(
+            "taskboard-tauri-prefs-{}-{}.db",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let expected = ViewPrefs {
+            order: vec!["beta".into(), "alpha".into()],
+            pinned: vec!["beta".into()],
+        };
+        assert_eq!(
+            write_view_prefs(&database, expected.clone()).expect("prefs should save"),
+            expected
+        );
+        assert_eq!(load_view_prefs(&database), expected);
+        let _ = fs::remove_file(view_prefs_path(&database));
     }
 }

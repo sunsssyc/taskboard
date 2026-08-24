@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { demoSnapshot } from "../demo";
-import { noteMatches, projectMatches, taskMatches, useBoardStore } from "./board";
+import {
+  moveProjectOrder,
+  noteMatches,
+  projectMatches,
+  sortProjectsByPrefs,
+  taskMatches,
+  useBoardStore,
+} from "./board";
 
 describe("board search", () => {
   beforeEach(() => setActivePinia(createPinia()));
@@ -46,5 +53,18 @@ describe("board search", () => {
     board.statusFilter = "";
     board.ownerFilter = "双方";
     expect(board.filteredTasks(demoSnapshot.projects[0]).map((task) => task.ref)).toEqual([18]);
+  });
+
+  it("sorts pinned projects before the remembered order", () => {
+    const ordered = sortProjectsByPrefs(demoSnapshot.projects, {
+      order: ["reg-calibration", "taskboard"],
+      pinned: ["taskboard"],
+    });
+    expect(ordered.map((project) => project.key)).toEqual(["taskboard", "reg-calibration"]);
+  });
+
+  it("moves projects before or after the drop target", () => {
+    expect(moveProjectOrder(["a", "b", "c"], "c", "a", true)).toEqual(["c", "a", "b"]);
+    expect(moveProjectOrder(["a", "b", "c"], "a", "b", false)).toEqual(["b", "a", "c"]);
   });
 });

@@ -1,12 +1,13 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
-import { loadBoardSnapshot } from "../board";
+import { loadBoardSnapshot, saveBoardViewPrefs } from "../board";
 import type {
   BoardNote,
   BoardProject,
   BoardSnapshot,
   BoardTask,
   TaskStatus,
+  ViewPrefs,
 } from "../types";
 
 function normalized(value: string | null | undefined): string {
@@ -46,23 +47,61 @@ export function projectMatches(project: BoardProject, query: string): boolean {
   ].some((value) => normalized(value).includes(needle));
 }
 
+export function sortProjectsByPrefs(
+  projects: BoardProject[],
+  prefs: ViewPrefs,
+): BoardProject[] {
+  const rank = new Map(prefs.order.map((key, index) => [key, index]));
+  const pinned = new Set(prefs.pinned);
+  const fallback = prefs.order.length;
+  return projects
+    .map((project, index) => ({ project, index }))
+    .sort((left, right) => {
+      const leftPinned = pinned.has(left.project.key);
+      const rightPinned = pinned.has(right.project.key);
+      if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;
+      const leftRank = rank.get(left.project.key) ?? fallback + left.index;
+      const rightRank = rank.get(right.project.key) ?? fallback + right.index;
+      return leftRank - rightRank;
+    })
+    .map(({ project }) => project);
+}
+
+export function moveProjectOrder(
+  keys: string[],
+  draggedKey: string,
+  targetKey: string,
+  before: boolean,
+): string[] {
+  if (draggedKey === targetKey || !keys.includes(draggedKey) || !keys.includes(targetKey)) {
+    return [...keys];
+  }
+  const next = keys.filter((key) => key !== draggedKey);
+  const targetIndex = next.indexOf(targetKey);
+  next.splice(before ? targetIndex : targetIndex + 1, 0, draggedKey);
+  return next;
+}
+
 export const useBoardStore = defineStore("board", () => {
   const snapshot = ref<BoardSnapshot | null>(null);
   const selectedProjectKey = ref("");
   const query = ref("");
   const statusFilter = ref<"" | TaskStatus>("");
   const ownerFilter = ref("");
+  const viewPrefs = ref<ViewPrefs>({ order: [], pinned: [] });
+  const preferenceError = ref("");
   const source = ref("");
   const loading = ref(false);
   const error = ref("");
 
   const projects = computed(() => snapshot.value?.projects ?? []);
+  const orderedProjects = computed(() => sortProjectsByPrefs(projects.value, viewPrefs.value));
   const selectedProject = computed<BoardProject | null>(() => {
     if (!selectedProjectKey.value) return null;
     return projects.value.find((project) => project.key === selectedProjectKey.value) ?? null;
   });
   const visibleProjects = computed(() =>
-    selectedProject.value ? [selectedProject.value] : projects.value,
+    selectedProject.value ? [selectedProject.value] : orderedProjects.value,
   );
   const owners = computed(() => {
     const values = new Set<string>();
@@ -133,6 +172,53 @@ export const useBoardStore = defineStore("board", () => {
     selectedProjectKey.value = "";
   }
 
+  let preferenceRevision = 0;
+  let preferenceQueue = Promise.resolve();
+
+  function persistViewPrefs() {
+    const revision = ++preferenceRevision;
+    const pending: ViewPrefs = {
+      order: [...viewPrefs.value.order],
+      pinned: [...viewPrefs.value.pinned],
+    };
+    preferenceError.value = "";
+    preferenceQueue = preferenceQueue
+      .then(async () => {
+        const saved = await saveBoardViewPrefs(pending);
+        if (revision === preferenceRevision) viewPrefs.value = saved;
+      })
+      .catch((reason: unknown) => {
+        if (revision === preferenceRevision) {
+          preferenceError.value = reason instanceof Error ? reason.message : String(reason);
+        }
+      });
+  }
+
+  function togglePinned(key: string) {
+    const pinned = [...viewPrefs.value.pinned];
+    const index = pinned.indexOf(key);
+    if (index === -1) pinned.push(key);
+    else pinned.splice(index, 1);
+    viewPrefs.value = {
+      order: orderedProjects.value.map((project) => project.key),
+      pinned,
+    };
+    persistViewPrefs();
+  }
+
+  function reorderProject(draggedKey: string, targetKey: string, before: boolean) {
+    viewPrefs.value = {
+      order: moveProjectOrder(
+        orderedProjects.value.map((project) => project.key),
+        draggedKey,
+        targetKey,
+        before,
+      ),
+      pinned: [...viewPrefs.value.pinned],
+    };
+    persistViewPrefs();
+  }
+
   async function load() {
     loading.value = true;
     error.value = "";
@@ -140,6 +226,7 @@ export const useBoardStore = defineStore("board", () => {
       const response = await loadBoardSnapshot();
       snapshot.value = response.snapshot;
       source.value = response.source;
+      viewPrefs.value = response.viewPrefs;
       if (
         selectedProjectKey.value &&
         !response.snapshot.projects.some((project) => project.key === selectedProjectKey.value)
@@ -159,10 +246,13 @@ export const useBoardStore = defineStore("board", () => {
     query,
     statusFilter,
     ownerFilter,
+    viewPrefs,
+    preferenceError,
     source,
     loading,
     error,
     projects,
+    orderedProjects,
     visibleProjects,
     displayProjects,
     selectedProject,
@@ -178,6 +268,8 @@ export const useBoardStore = defineStore("board", () => {
     projectHasMatches,
     selectProject,
     selectAllProjects,
+    togglePinned,
+    reorderProject,
     load,
   };
 });

@@ -75,7 +75,13 @@ export interface BoardSnapshot {
   projects: BoardProject[];
 }
 
+export interface ViewPrefs {
+  order: string[];
+  pinned: string[];
+}
+
 export interface BoardLoadResponse {
   snapshot: BoardSnapshot;
   source: string;
+  viewPrefs: ViewPrefs;
 }

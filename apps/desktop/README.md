@@ -9,8 +9,8 @@ SQLite 数据模型和现有 Swift 菜单栏 App，不在 Vue 或 Rust 中复制
 Vue UI → Tauri load_board command → board export --json → SQLite
 ```
 
-Rust command 只允许执行 `export --json --show-paths --out -`。本阶段没有任务状态、新建记录或
-SQLite 直写入口。
+Rust command 只允许执行 `export --json --show-paths --out -`。任务状态、新建记录和 SQLite
+仍保持只读；需求拖动顺序与置顶状态通过数据库旁的 `*.view.json` sidecar 与 Swift 版共享。
 
 ## 开发
 
@@ -51,6 +51,6 @@ cargo test --manifest-path src-tauri/Cargo.toml
 npm run tauri build -- --no-bundle
 ```
 
-当前 POC 已按成熟看板视觉迁移全局统计、搜索、状态/负责人筛选、全部/单需求切换、需求任务
-大纲、任务 spine、任务详情折叠与结论/风险分类折叠，并覆盖 375px、1440px、1600px 三档
-布局。状态写入和 sidecar 正式打包不在本阶段范围内。
+当前 POC 已按成熟看板视觉迁移全局统计、搜索、状态/负责人筛选、全部/单需求切换、需求置顶/
+拖动排序、需求任务大纲、任务 spine、任务详情折叠与结论/风险分类折叠，并覆盖 375px、
+1440px、1600px 三档布局。任务状态写入和 sidecar 正式打包不在本阶段范围内。

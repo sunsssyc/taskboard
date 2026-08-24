@@ -265,6 +265,7 @@ code {
 .all-projects-button span { color: var(--ink-faint); font-size: 10.5px; }
 
 .project-group {
+  position: relative;
   border-radius: var(--radius-md);
   transition: background 150ms ease, box-shadow 150ms ease;
 }
@@ -279,13 +280,57 @@ code {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding: 9px 11px;
+  padding: 9px 32px 9px 11px;
   border-radius: var(--radius-md);
   color: inherit;
 }
 
 .project-card:hover { background: rgb(0 0 0 / 5%); }
+.project-card { cursor: grab; }
+.project-card:active { cursor: grabbing; }
 .project-group.selected .project-card:hover { background: rgb(255 255 255 / 8%); }
+
+.pin-button {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: var(--ink-faint);
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 150ms ease, background 150ms ease, color 150ms ease;
+}
+.pin-button svg { width: 12px; height: 12px; }
+.project-group:hover .pin-button,
+.pin-button:focus-visible,
+.pin-button.active { opacity: 1; }
+.pin-button:hover { color: var(--ink); background: rgb(0 0 0 / 7%); }
+.pin-button.active { color: var(--accent); }
+.project-group.selected .pin-button { color: rgb(255 255 255 / 75%); }
+.project-group.selected .pin-button:hover { color: #fff; background: rgb(255 255 255 / 20%); }
+.project-group.selected .pin-button.active { color: #fff; }
+.project-group.dragging { opacity: 0.45; }
+.project-group.drop-before::before,
+.project-group.drop-after::after {
+  position: absolute;
+  right: 4px;
+  left: 4px;
+  z-index: 2;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--accent);
+  content: "";
+  pointer-events: none;
+}
+.project-group.drop-before::before { top: -2px; }
+.project-group.drop-after::after { bottom: -2px; }
 
 .project-key {
   overflow: hidden;
@@ -406,6 +451,7 @@ code {
 .navigator-footer strong,
 .navigator-footer small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .navigator-footer strong { color: var(--ink-muted); font-size: 10.5px; }
+.navigator-footer strong.error { color: var(--alert); }
 .navigator-footer small { font-size: 9.5px; }
 .source-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--done); }
 .source-dot.demo { background: var(--active); }
@@ -744,6 +790,7 @@ code {
   .project-list::-webkit-scrollbar { display: none; }
   .all-projects-button { width: 150px; flex: 0 0 auto; }
   .project-group { width: 220px; flex: 0 0 auto; }
+  .pin-button { opacity: 1; }
   .project-outline,
   .navigator-footer { display: none; }
   .content { overflow: visible; gap: 22px; padding: 18px 12px 38px; }

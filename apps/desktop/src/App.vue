@@ -17,8 +17,11 @@ const {
   loading,
   error,
   projects,
+  orderedProjects,
   displayProjects,
   owners,
+  viewPrefs,
+  preferenceError,
 } = storeToRefs(board);
 
 const globalCounts = computed<TaskCounts>(() => {
@@ -138,13 +141,17 @@ onMounted(() => board.load());
 
     <div class="dashboard">
       <ProjectSidebar
-        :projects="projects"
+        :projects="orderedProjects"
         :selected-key="selectedProjectKey"
+        :pinned-keys="viewPrefs.pinned"
         :source="source"
         :database="snapshot?.db ?? null"
+        :preference-error="preferenceError"
         @select="board.selectProject"
         @select-all="board.selectAllProjects"
         @focus-task="focusTask"
+        @toggle-pin="board.togglePinned"
+        @reorder="board.reorderProject"
       />
 
       <main class="content">
