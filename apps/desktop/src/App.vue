@@ -1,12 +1,21 @@
 <script setup lang="ts">
-import { computed, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import { storeToRefs } from "pinia";
 import ProjectSidebar from "./components/ProjectSidebar.vue";
 import ProjectWorkspace from "./components/ProjectWorkspace.vue";
 import { useBoardStore } from "./stores/board";
 import type { TaskCounts, TaskStatus } from "./types";
+import {
+  applyZoom,
+  readStoredZoom,
+  zoomActionForShortcut,
+  zoomForAction,
+} from "./zoom";
 
 const board = useBoardStore();
+const zoomScale = ref(readStoredZoom());
+const zoomNotice = ref("");
+let zoomNoticeTimer: number | undefined;
 const {
   snapshot,
   selectedProjectKey,
@@ -82,11 +91,46 @@ function focusTask(ref: number) {
   });
 }
 
-onMounted(() => board.load());
+function showZoomNotice(message: string) {
+  window.clearTimeout(zoomNoticeTimer);
+  zoomNotice.value = message;
+  zoomNoticeTimer = window.setTimeout(() => { zoomNotice.value = ""; }, 1100);
+}
+
+async function setZoom(scale: number, announce = true) {
+  try {
+    zoomScale.value = await applyZoom(scale);
+    if (announce) showZoomNotice(`${Math.round(zoomScale.value * 100)}%`);
+  } catch (reason) {
+    showZoomNotice(reason instanceof Error ? reason.message : "缩放失败");
+  }
+}
+
+function onZoomShortcut(event: KeyboardEvent) {
+  const action = zoomActionForShortcut(event);
+  if (!action) return;
+  event.preventDefault();
+  void setZoom(zoomForAction(zoomScale.value, action));
+}
+
+onMounted(() => {
+  void board.load();
+  void setZoom(zoomScale.value, false);
+  window.addEventListener("keydown", onZoomShortcut);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("keydown", onZoomShortcut);
+  window.clearTimeout(zoomNoticeTimer);
+});
 </script>
 
 <template>
   <div class="app-frame">
+    <Transition name="zoom-fade">
+      <div v-if="zoomNotice" class="zoom-notice" aria-live="polite">{{ zoomNotice }}</div>
+    </Transition>
+
     <header class="masthead">
       <h1>任务看板</h1>
       <span class="masthead-subtitle">taskboard · 持久工作流</span>

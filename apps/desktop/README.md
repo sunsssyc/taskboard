@@ -39,6 +39,14 @@ TASKBOARD_PYTHON=/path/to/python \
 npm run tauri dev
 ```
 
+桌面缩放快捷键：
+
+- `Command/Ctrl + =` 或 `Command/Ctrl + +`：放大 10%；
+- `Command/Ctrl + -`：缩小 10%；
+- `Command/Ctrl + 0`：恢复 100%。
+
+缩放范围限制为 75%–175%，比例保存在本机 WebView 存储中。
+
 若已经安装稳定的 `board` 可执行文件，也可设置 `TASKBOARD_BOARD_EXECUTABLE`。开发构建优先
 从仓库根目录运行 Python 模块，避免可编辑安装因仓库改名而失效。
 

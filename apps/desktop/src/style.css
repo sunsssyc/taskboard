@@ -104,6 +104,30 @@ code {
   grid-template-rows: 52px 44px minmax(0, 1fr);
 }
 
+.zoom-notice {
+  position: fixed;
+  top: 108px;
+  left: 50%;
+  z-index: 40;
+  min-width: 64px;
+  padding: 7px 12px;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 9px;
+  color: #fff;
+  background: rgb(29 29 31 / 84%);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 20%);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  transform: translateX(-50%);
+  backdrop-filter: blur(12px);
+  pointer-events: none;
+}
+.zoom-fade-enter-active,
+.zoom-fade-leave-active { transition: opacity 120ms ease, transform 120ms ease; }
+.zoom-fade-enter-from,
+.zoom-fade-leave-to { opacity: 0; transform: translate(-50%, -5px); }
+
 .masthead {
   z-index: 3;
   display: flex;
