@@ -113,7 +113,7 @@ Agent 可以提出修改建议，但不能自行改变目标契约。
 例如：
 
 ```text
-注册模型时代校准
+注册风控模型校准
   coinex_backend · coinex_anti_fraud_service · coinex_admin_frontend
   ▸ 发布导出采样策略
   · 按名单补录事实

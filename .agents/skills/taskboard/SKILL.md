@@ -38,7 +38,7 @@ board notes    # 有效 finding、risk 和 link
 明确给出仓库集合时，不重复询问。不要静默把当前目录当成唯一仓库。确认后使用重复的 `--repo`：
 
 ```bash
-board init registration-calibration --name "注册模型时代校准" \
+board init registration-calibration --name "注册风控模型校准" \
   --summary "修复时代误伤并重构训练数据" \
   --repo /path/to/coinex_backend \
   --repo /path/to/coinex_anti_fraud_service \
