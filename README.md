@@ -228,6 +228,20 @@ macOS 13+ 的 `SMAppService`;首次启用后若系统要求批准,到“系统�
 图标母版位于 `macos/TaskboardMenuBar/Resources/AppIcon.png`。构建时
 `Scripts/make_icns.sh` 会生成 16px 到 1024px 的标准 `AppIcon.icns` 并装入 App。
 
+### Tauri + Vue 只读 POC
+
+`apps/desktop` 验证用 Tauri v2 + Vue 3 + TypeScript + Pinia 替换桌面展示层。POC 通过受限
+Rust command 调用 `board export --json`，保留现有 Python CLI、SQLite 数据模型和 Swift
+实现；当前只支持需求切换、搜索与折叠，不提供状态写入。
+
+```bash
+cd apps/desktop
+npm install
+npm run tauri dev
+```
+
+开发约束、数据入口和验证命令见 [`apps/desktop/README.md`](apps/desktop/README.md)。
+
 ## 寻址规则
 
 任务在需求内用 `#ref` 寻址(需求内自增)。`projects`、`--project` 等内部/CLI 名称为兼容保留。
@@ -245,6 +259,8 @@ macOS 13+ 的 `SMAppService`;首次启用后若系统要求批准,到“系统�
 ```bash
 python3 -m pytest tests -q
 swift run --package-path macos/TaskboardMenuBar TaskboardCoreSelfTest
+cd apps/desktop && npm run test && npm run build
+cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 ```
 
 数据模型:`projects`(产品语义为需求/工作流) / `repositories` /

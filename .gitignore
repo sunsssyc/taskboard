@@ -9,3 +9,6 @@ board.html
 board.json
 .demo-board/
 macos/TaskboardMenuBar/.build/
+apps/desktop/node_modules/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/target/
