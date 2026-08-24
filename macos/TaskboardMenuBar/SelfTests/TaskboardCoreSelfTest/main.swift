@@ -114,6 +114,11 @@ func runSelfTests() throws {
     try expect(html.contains(database.path), "本地 App 导出没有保留数据库路径")
     try expect(html.contains("Swift Self Test"), "导出 HTML 缺少项目名称")
     try expect(html.contains("热更新检查"), "导出 HTML 缺少任务名称")
+    try expect(html.contains("status-button"), "本地 App 导出缺少可点击状态按钮")
+    try expect(
+        html.contains("handlers.boardStatus.postMessage"),
+        "本地 App 导出缺少原生状态写入桥"
+    )
 }
 
 do {

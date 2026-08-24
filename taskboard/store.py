@@ -1,7 +1,7 @@
-"""SQLite 存储层:项目、任务、依赖、结论/风险、事件流。
+"""SQLite 存储层:需求、仓库、任务、依赖、结论/风险、事件流。
 
-单库跨项目:默认 ~/.taskboard/board.db(可用 TASKBOARD_HOME 改),每个项目一条
-记录、任务在项目内自增编号(ref),CLI 与渲染器都只经由本层读写。
+单库跨需求:默认 ~/.taskboard/board.db(可用 TASKBOARD_HOME 改),内部 projects 表
+兼容承载需求/工作流，任务在需求内自增编号(ref),CLI 与渲染器都只经由本层读写。
 """
 from __future__ import annotations
 
@@ -99,6 +99,16 @@ CREATE TABLE IF NOT EXISTS projects (
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS repositories (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    name        TEXT NOT NULL,
+    path        TEXT NOT NULL UNIQUE
+);
+CREATE TABLE IF NOT EXISTS project_repositories (
+    project       TEXT NOT NULL REFERENCES projects(key) ON DELETE CASCADE,
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    PRIMARY KEY (project, repository_id)
+);
 CREATE TABLE IF NOT EXISTS tasks (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     project     TEXT NOT NULL REFERENCES projects(key) ON DELETE CASCADE,
@@ -114,6 +124,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
     UNIQUE (project, ref)
+);
+CREATE TABLE IF NOT EXISTS task_repositories (
+    task_id       INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    PRIMARY KEY (task_id, repository_id)
 );
 CREATE TABLE IF NOT EXISTS deps (
     task_id       INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -141,6 +156,8 @@ CREATE TABLE IF NOT EXISTS events (
     at          TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project, ref);
+CREATE INDEX IF NOT EXISTS idx_project_repositories_repo ON project_repositories(repository_id);
+CREATE INDEX IF NOT EXISTS idx_task_repositories_repo ON task_repositories(repository_id);
 CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project, kind);
 CREATE INDEX IF NOT EXISTS idx_events_at ON events(at DESC);
 """
@@ -178,6 +195,26 @@ class Store:
         })
         self._add_columns('tasks', {'accept': 'TEXT', 'branch': 'TEXT', 'pr': 'TEXT'})
         self._add_columns('projects', {'artifact_url': 'TEXT'})
+        # 兼容旧库的单 repo 字段:先把它登记为需求关联仓库；既有任务无法还原
+        # 更细的历史归属，安全地继承这一个旧仓库。
+        for project in self.conn.execute(
+            'SELECT key, repo FROM projects WHERE repo IS NOT NULL AND repo != ""'
+        ):
+            if self.conn.execute(
+                'SELECT 1 FROM project_repositories WHERE project = ? LIMIT 1',
+                (project['key'],),
+            ).fetchone():
+                continue
+            repository_id = self._ensure_repository(project['repo'])
+            self.conn.execute(
+                'INSERT OR IGNORE INTO project_repositories (project, repository_id) VALUES (?,?)',
+                (project['key'], repository_id),
+            )
+            self.conn.execute(
+                'INSERT OR IGNORE INTO task_repositories (task_id, repository_id) '
+                'SELECT id, ? FROM tasks WHERE project = ?',
+                (repository_id, project['key']),
+            )
 
     def close(self) -> None:
         self.conn.close()
@@ -200,18 +237,99 @@ class Store:
         args.append(limit)
         return list(self.conn.execute(sql, args))
 
-    # ── 项目 ────────────────────────────────────────────────────────────
+    # ── 需求 / 仓库 ─────────────────────────────────────────────────────
+    @staticmethod
+    def _normalize_repo_paths(repositories: list[str] | tuple[str, ...]) -> list[str]:
+        normalized: list[str] = []
+        for repository in repositories:
+            if not repository:
+                continue
+            path = str(Path(repository).expanduser().resolve())
+            if path not in normalized:
+                normalized.append(path)
+        return normalized
+
+    def _ensure_repository(self, path: str) -> int:
+        normalized = str(Path(path).expanduser().resolve())
+        name = Path(normalized).name or normalized
+        self.conn.execute(
+            'INSERT OR IGNORE INTO repositories (name, path) VALUES (?,?)',
+            (name, normalized),
+        )
+        row = self.conn.execute(
+            'SELECT id FROM repositories WHERE path = ?', (normalized,),
+        ).fetchone()
+        return int(row['id'])
+
+    def _replace_project_repositories(self, project: str, repositories: list[str]) -> None:
+        self.conn.execute('DELETE FROM project_repositories WHERE project = ?', (project,))
+        for path in self._normalize_repo_paths(repositories):
+            repository_id = self._ensure_repository(path)
+            self.conn.execute(
+                'INSERT INTO project_repositories (project, repository_id) VALUES (?,?)',
+                (project, repository_id),
+            )
+
+    def project_repositories(self, project: str) -> list[sqlite3.Row]:
+        self.get_project(project)
+        return list(self.conn.execute(
+            'SELECT r.id, r.name, r.path FROM repositories r '
+            'JOIN project_repositories pr ON pr.repository_id = r.id '
+            'WHERE pr.project = ? ORDER BY r.name, r.path',
+            (project,),
+        ))
+
+    def set_project_repositories(self, project: str, repositories: list[str]) -> list[sqlite3.Row]:
+        self.get_project(project)
+        normalized = self._normalize_repo_paths(repositories)
+        current = self.project_repositories(project)
+        removed_ids = {
+            row['id'] for row in current if row['path'] not in set(normalized)
+        }
+        if removed_ids:
+            placeholders = ','.join('?' for _ in removed_ids)
+            used = list(self.conn.execute(
+                f'SELECT DISTINCT t.ref FROM tasks t '
+                f'JOIN task_repositories tr ON tr.task_id = t.id '
+                f'WHERE t.project = ? AND tr.repository_id IN ({placeholders}) ORDER BY t.ref',
+                (project, *sorted(removed_ids)),
+            ))
+            if used:
+                refs = ', #'.join(str(row['ref']) for row in used)
+                raise BoardError(
+                    f'仓库仍被任务 #{refs} 使用;先用 board edit <ref> --repo ... 调整任务关联'
+                )
+        self._replace_project_repositories(project, normalized)
+        self.conn.execute(
+            'UPDATE projects SET repo = ?, updated_at = ? WHERE key = ?',
+            (normalized[0] if normalized else None, now_iso(), project),
+        )
+        self.log_event(
+            'project_repositories_changed', project=project,
+            repositories=[Path(path).name for path in normalized],
+        )
+        self.conn.commit()
+        return self.project_repositories(project)
+
     def create_project(self, key: str, name: str, repo: str | None = None,
-                       summary: str | None = None) -> sqlite3.Row:
+                       summary: str | None = None,
+                       repositories: list[str] | None = None) -> sqlite3.Row:
         if self.find_project(key):
-            raise BoardError(f'项目已存在: {key}')
+            raise BoardError(f'需求已存在: {key}')
+        repo_paths = self._normalize_repo_paths(
+            list(repositories or []) + ([repo] if repo else [])
+        )
         stamp = now_iso()
         self.conn.execute(
             'INSERT INTO projects (key, name, repo, summary, created_at, updated_at)'
             ' VALUES (?,?,?,?,?,?)',
-            (key, name, str(Path(repo).resolve()) if repo else None, summary, stamp, stamp),
+            (key, name, repo_paths[0] if repo_paths else None, summary, stamp, stamp),
         )
-        self.log_event('project_created', project=key, name=name)
+        self._replace_project_repositories(key, repo_paths)
+        self.log_event(
+            'project_created', project=key, name=name,
+            repositories=[Path(path).name for path in repo_paths],
+        )
         self.conn.commit()
         return self.get_project(key)
 
@@ -221,7 +339,7 @@ class Store:
     def get_project(self, key: str) -> sqlite3.Row:
         row = self.find_project(key)
         if row is None:
-            raise BoardError(f'没有这个项目: {key}(先 board init {key})')
+            raise BoardError(f'没有这个需求: {key}(先 board init {key})')
         return row
 
     def projects(self, include_archived: bool = False) -> list[sqlite3.Row]:
@@ -233,13 +351,14 @@ class Store:
 
     def update_project(self, key: str, **fields) -> sqlite3.Row:
         project = self.get_project(key)
-        allowed = {'name', 'repo', 'summary', 'archived', 'artifact_url'}
+        repo_value = fields.pop('repo', None)
+        if repo_value is not None:
+            self.set_project_repositories(key, [repo_value])
+        allowed = {'name', 'summary', 'archived', 'artifact_url'}
         sets, args = [], []
         for field, value in fields.items():
             if field not in allowed or value is None:
                 continue
-            if field == 'repo':
-                value = str(Path(value).resolve())
             sets.append(f'{field} = ?')
             args.append(int(value) if field == 'archived' else value)
         if sets:
@@ -250,25 +369,33 @@ class Store:
             self.conn.commit()
         return self.get_project(project['key'])
 
-    def project_for_path(self, path: str | Path) -> sqlite3.Row | None:
-        """按 cwd 归属判定当前项目:取路径最长(最具体)的匹配项目。"""
+    def projects_for_path(self, path: str | Path) -> list[sqlite3.Row]:
+        """按 cwd 找需求；同一仓库关联多个需求时全部返回，由调用方要求显式选择。"""
         target = Path(path).resolve()
-        best = None
+        matches: list[tuple[int, sqlite3.Row]] = []
         for project in self.projects(include_archived=True):
-            repo = project['repo']
-            if not repo:
-                continue
-            repo_path = Path(repo)
-            if target == repo_path or repo_path in target.parents:
-                if best is None or len(repo) > len(best['repo']):
-                    best = project
-        return best
+            scores = [
+                len(repository['path'])
+                for repository in self.project_repositories(project['key'])
+                if target == Path(repository['path']) or Path(repository['path']) in target.parents
+            ]
+            if scores:
+                matches.append((max(scores), project))
+        if not matches:
+            return []
+        best_score = max(score for score, _project in matches)
+        return [project for score, project in matches if score == best_score]
+
+    def project_for_path(self, path: str | Path) -> sqlite3.Row | None:
+        matches = self.projects_for_path(path)
+        return matches[0] if len(matches) == 1 else None
 
     # ── 任务 ────────────────────────────────────────────────────────────
     def add_task(self, project: str, title: str, detail: str | None = None,
                  owner: str | None = None, gate: bool = False,
                  blocked_by: list[int] | None = None, accept: str | None = None,
-                 branch: str | None = None, pr: str | None = None) -> sqlite3.Row:
+                 branch: str | None = None, pr: str | None = None,
+                 repositories: list[str] | None = None) -> sqlite3.Row:
         self.get_project(project)
         # ref 是"读 MAX+1 再插":必须在写锁下完成,否则两个进程会算出同一个号。
         # BEGIN IMMEDIATE 在读之前就拿写锁,配合 UNIQUE(project, ref) 双保险。
@@ -287,14 +414,75 @@ class Store:
                  branch, pr, stamp, stamp),
             )
             task_id = cursor.lastrowid
+            selected_repositories = self._resolve_task_repositories(project, repositories)
+            for repository in selected_repositories:
+                self.conn.execute(
+                    'INSERT INTO task_repositories (task_id, repository_id) VALUES (?,?)',
+                    (task_id, repository['id']),
+                )
             for blocker_ref in blocked_by or []:
                 self._add_dep(task_id, self.get_task(project, blocker_ref)['id'])
-            self.log_event('task_added', project=project, task_ref=next_ref, title=title)
+            self.log_event(
+                'task_added', project=project, task_ref=next_ref, title=title,
+                repositories=[repository['name'] for repository in selected_repositories],
+            )
             self.conn.commit()
         except Exception:
             self.conn.rollback()
             raise
         return self.get_task(project, next_ref)
+
+    def _resolve_task_repositories(
+        self, project: str, requested: list[str] | None,
+    ) -> list[sqlite3.Row]:
+        available = self.project_repositories(project)
+        if requested is None:
+            return available
+        selected: list[sqlite3.Row] = []
+        for token in requested:
+            resolved_path = str(Path(token).expanduser().resolve())
+            matches = [
+                repository for repository in available
+                if token in (repository['name'], repository['path'])
+                or resolved_path == repository['path']
+            ]
+            if not matches:
+                raise BoardError(f'仓库 {token} 未关联到需求 {project}')
+            if len(matches) > 1:
+                raise BoardError(f'仓库名 {token} 不唯一,请传完整路径')
+            if matches[0]['id'] not in {repository['id'] for repository in selected}:
+                selected.append(matches[0])
+        return selected
+
+    def task_repositories(self, project: str, ref: int) -> list[sqlite3.Row]:
+        task = self.get_task(project, ref)
+        return list(self.conn.execute(
+            'SELECT r.id, r.name, r.path FROM repositories r '
+            'JOIN task_repositories tr ON tr.repository_id = r.id '
+            'WHERE tr.task_id = ? ORDER BY r.name, r.path',
+            (task['id'],),
+        ))
+
+    def set_task_repositories(
+        self, project: str, ref: int, repositories: list[str],
+    ) -> list[sqlite3.Row]:
+        task = self.get_task(project, ref)
+        selected = self._resolve_task_repositories(project, repositories)
+        self.conn.execute('DELETE FROM task_repositories WHERE task_id = ?', (task['id'],))
+        for repository in selected:
+            self.conn.execute(
+                'INSERT INTO task_repositories (task_id, repository_id) VALUES (?,?)',
+                (task['id'], repository['id']),
+            )
+        self.conn.execute(
+            'UPDATE tasks SET updated_at = ? WHERE id = ?', (now_iso(), task['id']),
+        )
+        self.log_event(
+            'task_repositories_changed', project=project, task_ref=ref,
+            repositories=[repository['name'] for repository in selected],
+        )
+        self.conn.commit()
+        return self.task_repositories(project, ref)
 
     def get_task(self, project: str, ref: int) -> sqlite3.Row:
         row = self.conn.execute(
@@ -572,12 +760,33 @@ class Store:
             pending = [ref for ref in pending if ref not in emitted_refs]
         return emitted
 
+    def _task_first_started_at(self, project: str) -> dict[int, str]:
+        """从只追加事件流推导各任务第一次进入 active 的时间。"""
+        started: dict[int, str] = {}
+        rows = self.conn.execute(
+            "SELECT task_ref, payload, at FROM events "
+            "WHERE project = ? AND action = 'status_changed' ORDER BY id",
+            (project,),
+        )
+        for row in rows:
+            if row['task_ref'] is None or row['task_ref'] in started:
+                continue
+            try:
+                payload = json.loads(row['payload']) if row['payload'] else {}
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if payload.get('new') == 'active':
+                started[row['task_ref']] = row['at']
+        return started
+
     def snapshot(self, include_archived: bool = False) -> dict:
         """渲染与 `board next` 共用的完整状态快照。"""
         data = {'generated_at': now_iso(), 'db': str(self.path), 'projects': []}
         for project in self.projects(include_archived=include_archived):
             key = project['key']
             deps = self.dep_map(key)
+            project_repositories = [dict(row) for row in self.project_repositories(key)]
+            first_started_at = self._task_first_started_at(key)
             tasks = []
             done_refs = {
                 task['ref'] for task in self.tasks(key) if task['status'] == 'done'
@@ -595,6 +804,9 @@ class Store:
                     'gate': bool(task['gate']),
                     'branch': task['branch'],
                     'pr': task['pr'],
+                    'repositories': [
+                        dict(row) for row in self.task_repositories(key, task['ref'])
+                    ],
                     'blocked_by': blockers,
                     'open_blockers': open_blockers,
                     'blocks': sorted(
@@ -602,6 +814,8 @@ class Store:
                     ),
                     # waiting 卡在人工动作上,不算"能开工"——它要的是人不是我
                     'actionable': task['status'] in ACTIONABLE_STATUSES and not open_blockers,
+                    'created_at': task['created_at'],
+                    'first_started_at': first_started_at.get(task['ref']),
                     'updated_at': task['updated_at'],
                 })
             tasks = self._order_by_dependency(tasks)
@@ -612,6 +826,7 @@ class Store:
                 'key': key,
                 'name': project['name'],
                 'repo': project['repo'],
+                'repositories': project_repositories,
                 'summary': project['summary'],
                 'artifact_url': project['artifact_url'],
                 'archived': bool(project['archived']),

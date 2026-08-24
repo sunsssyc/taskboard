@@ -1,11 +1,11 @@
 # claude-taskboard
 
-面向个人与 AI 编程助手的跨项目任务看板。CLI 更新进度,本地服务实时查看,或导出
+面向个人与 AI 编程助手的跨对话需求/工作流看板。CLI 更新进度,本地服务实时查看,或导出
 自包含 HTML 发到任何地方。它不是多人协作、权限管理或云同步系统。
 纯标准库,无第三方依赖;数据存 `~/.taskboard/board.db`(SQLite)。
 
 解决的问题:和 Claude Code、Codex 等助手长对话时,计划滚出上下文就看不见了;
-多个仓库并行推进时,
+一个需求跨多个仓库推进时,
 「现在能开工的是哪几件、谁卡着谁」没有单一去处。
 
 ## 30 秒看懂
@@ -100,13 +100,14 @@ grep -Fqx '@./taskboard.md' "$HOME/.gemini/GEMINI.md" || \
 ## 上手
 
 ```bash
-# 登记项目(--repo 登记后,在该目录下执行 board 命令自动定位此项目)
-board init website-refresh --name "网站改版" --repo . --summary "重做官网并完成上线"
+# 先确认稳定目标和涉及仓库，再登记一级需求；--repo 可重复
+board init website-refresh --name "网站改版" --summary "重做官网并完成上线" \
+  --repo ../website_backend --repo ../website_frontend
 
-# 加任务,声明依赖
-board add "确认需求" --owner 你
-board add "实现页面" --owner 我 --blocked-by 1
-board add "发布上线" --gate --blocked-by 2        # --gate 标记闸门/关键节点
+# 加执行任务,明确本任务涉及需求仓库中的哪几个
+board add "确认需求" --owner 你 --repo website_backend --repo website_frontend
+board add "实现页面" --owner 我 --blocked-by 1 --repo website_frontend
+board add "发布上线" --gate --blocked-by 2 --repo website_backend --repo website_frontend
 
 # 推进
 board start 1
@@ -116,13 +117,16 @@ board done 1                                  # 提示解锁了谁、打印验�
 # 看
 board brief               # 交接摘要:新会话读这一段就能接上
 board next                # 现在能开工的(--owner 我 只看自己的)
-board ls                  # 当前项目未完成任务(--done 含已完成,-A 所有项目)
+board ls                  # 当前需求未完成任务(--done 含已完成,-A 所有需求)
 board find <关键词>        # 搜任务与记录
 board stale --days 3      # 停滞的在办任务
-board projects            # 所有项目的进度概览
+board projects            # 所有需求的进度概览(命令名为兼容保留)
 board show 3              # 单个任务详情
 board log                 # 变更历史
 ```
+
+Agent 初始化需求或给多仓库需求新增正式任务时，应先列出关联仓库并让用户确认；当前请求已明确
+仓库集合时可直接执行。CLI 在多仓库需求里省略 `board add --repo` 会拒绝创建，避免静默误挂。
 
 `todo`(没开工)、`active`(我在做)、`waiting`(等人工)三态分开:`waiting` 不算
 "可开工",因为它等的是人不是我;`board next` 会把它单列成"等人工"。
@@ -152,7 +156,7 @@ board note-category 12 18 --category "性能"  # 给已有记录归类
 - `risk` 尾巴与已知风险:不阻塞主线但别丢
 - `link` 关键文件/入口
 
-结论和风险按 `category` 分组展示，分类会进入 CLI、实时页面、静态导出和 JSON。每个项目
+结论和风险按 `category` 分组展示，分类会进入 CLI、实时页面、静态导出和 JSON。每个需求
 建议维护 2~6 个稳定主题，用“模型口径”“事实补录”“发布协同”这类短名词；不要把分类
 写成状态、日期或一次性标签。未填写的旧记录会安全落入“未分类”，可用
 `board note-category` 逐步回填，不需要迁移或重建数据库。
@@ -226,14 +230,15 @@ macOS 13+ 的 `SMAppService`;首次启用后若系统要求批准,到“系统�
 
 ## 寻址规则
 
-任务在项目内用 `#ref` 寻址(项目内自增)。当前项目的判定优先级:
+任务在需求内用 `#ref` 寻址(需求内自增)。`projects`、`--project` 等内部/CLI 名称为兼容保留。
+当前需求的判定优先级:
 
 1. `-p <key>` 显式指定
-2. cwd 落在某项目 `repo` 路径下(最具体的那个胜出)
-3. `board use <key>` 固定的项目
-4. 只有一个项目时就是它
+2. cwd 落在需求关联仓库路径下,且只匹配一个需求
+3. `board use <key>` 固定的需求
+4. 只有一个需求时就是它
 
-否则报错要求指定,不会猜。
+同一仓库可服务多个需求；出现多个匹配时会报错要求 `-p` 指定,不会猜。
 
 ## 开发
 
@@ -242,13 +247,16 @@ python3 -m pytest tests -q
 swift run --package-path macos/TaskboardMenuBar TaskboardCoreSelfTest
 ```
 
-数据模型:`projects` / `tasks`(项目内 ref 唯一)/ `deps`(建边时拒绝成环)/
+数据模型:`projects`(产品语义为需求/工作流) / `repositories` /
+`project_repositories` / `tasks`(需求内 ref 唯一) / `task_repositories` /
+`deps`(建边时拒绝成环)/
 `notes`(finding·risk·link,支持 supersede)/ `events`(只追加的变更流)。
 渲染与 `board next` 共用 `Store.snapshot()`,阻塞判定与"可开工"只有这一处实现。
 
 并发:WAL + `busy_timeout`,`ref` 分配在 `BEGIN IMMEDIATE` 写锁下完成,配合
 `UNIQUE(project, ref)` 双保险,多个 CLI 进程同时写不会重号。
-升级:新版本打开老库会自动补列,不需要单独的迁移命令。
+升级:新版本打开老库会把旧 `projects.repo` 自动回填到需求与既有任务的仓库关联表,
+不需要单独的迁移命令。
 
 ### 发布 Homebrew Formula
 

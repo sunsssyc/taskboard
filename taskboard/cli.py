@@ -1,7 +1,7 @@
 """board 命令行入口。
 
-当前项目按 cwd 归属自动判定(项目登记了 repo 路径),也可用 -p 显式指定或
-`board use` 固定。任务在项目内用 #ref 寻址。
+当前需求按 cwd 关联仓库自动判定,也可用 -p 显式指定或 `board use` 固定。
+任务在需求内用 #ref 寻址；project 命名仅为兼容保留。
 """
 from __future__ import annotations
 
@@ -39,12 +39,15 @@ def _current_path() -> Path:
 
 
 def resolve_project(store: Store, explicit: str | None) -> str:
-    """优先级:-p 参数 > cwd 归属 > board use 固定 > 唯一项目。"""
+    """优先级:-p 参数 > cwd 关联仓库 > board use 固定 > 唯一需求。"""
     if explicit:
         return store.get_project(explicit)['key']
-    by_path = store.project_for_path(Path.cwd())
-    if by_path is not None:
-        return by_path['key']
+    by_path = store.projects_for_path(Path.cwd())
+    if len(by_path) == 1:
+        return by_path[0]['key']
+    if len(by_path) > 1:
+        choices = ', '.join(project['key'] for project in by_path)
+        raise BoardError(f'当前仓库关联多个需求({choices}),请用 -p <key> 明确选择')
     pinned = _current_path()
     if pinned.exists():
         key = pinned.read_text().strip()
@@ -54,8 +57,8 @@ def resolve_project(store: Store, explicit: str | None) -> str:
     if len(projects) == 1:
         return projects[0]['key']
     raise BoardError(
-        '认不出当前项目:用 -p <key> 指定,或 board use <key> 固定,'
-        '或在项目仓库目录里执行(需 board init --repo 登记过路径)'
+        '认不出当前需求:用 -p <key> 指定,或 board use <key> 固定,'
+        '或在关联仓库目录里执行(需 board init --repo 登记过路径)'
     )
 
 
@@ -79,6 +82,8 @@ def print_task_line(task: dict, indent: str = '') -> None:
         bits.append(task['branch'])
     if task.get('pr'):
         bits.append(f'PR {task["pr"]}')
+    if task.get('repositories'):
+        bits.append('仓库 ' + ','.join(repository['name'] for repository in task['repositories']))
     if task['open_blockers']:
         bits.append(paint('阻塞于 #' + ',#'.join(str(r) for r in task['open_blockers']), DIM))
     elif task['status'] == 'waiting':
@@ -90,17 +95,20 @@ def print_task_line(task: dict, indent: str = '') -> None:
 
 
 def cmd_init(store: Store, args) -> int:
-    project = store.create_project(args.key, args.name or args.key, args.repo, args.summary)
-    print(f'已建项目 {paint(project["key"], BOLD)} · {project["name"]}')
-    if project['repo']:
-        print(f'  仓库 {project["repo"]}(在此目录下执行 board 命令即自动定位该项目)')
+    project = store.create_project(
+        args.key, args.name or args.key, summary=args.summary,
+        repositories=args.repo,
+    )
+    print(f'已建需求 {paint(project["key"], BOLD)} · {project["name"]}')
+    for repository in store.project_repositories(project['key']):
+        print(f'  仓库 {repository["name"]} · {repository["path"]}')
     return 0
 
 
 def cmd_projects(store: Store, args) -> int:
     snapshot = store.snapshot(include_archived=args.all)
     if not snapshot['projects']:
-        print('还没有项目。board init <key> --name "..." --repo .')
+        print('还没有需求。board init <key> --name "..." --repo .')
         return 0
     for project in snapshot['projects']:
         counts = project['counts']
@@ -109,6 +117,11 @@ def cmd_projects(store: Store, args) -> int:
         if project['archived']:
             head += paint('  [已归档]', DIM)
         print(head)
+        if project['repositories']:
+            print(paint(
+                '  仓库 ' + ' · '.join(repository['name'] for repository in project['repositories']),
+                DIM,
+            ))
         print(paint(
             f'  完成 {counts["done"]}/{total} · 进行 {counts["active"]} · 待办 {counts["todo"]}'
             + (f' · 闸门 #{",#".join(str(g) for g in project["gates"])}' if project['gates'] else ''),
@@ -122,7 +135,7 @@ def cmd_use(store: Store, args) -> int:
     path = _current_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(key)
-    print(f'当前项目固定为 {paint(key, BOLD)}')
+    print(f'当前需求固定为 {paint(key, BOLD)}')
     return 0
 
 
@@ -141,10 +154,18 @@ def git_head_sha(cwd: Path | None = None) -> str | None:
 def cmd_add(store: Store, args) -> int:
     validate_markdown_newlines(args.detail, args.accept)
     project = resolve_project(store, args.project)
+    available_repositories = store.project_repositories(project)
+    if args.repo is None and len(available_repositories) > 1:
+        choices = ', '.join(repository['name'] for repository in available_repositories)
+        raise BoardError(
+            f'需求 {project} 涉及多个仓库({choices});请先和用户确认本任务范围,'
+            '再用一个或多个 --repo 指定'
+        )
     task = store.add_task(
         project, args.title, detail=args.detail, owner=args.owner,
         gate=args.gate, blocked_by=_refs(args.blocked_by),
         accept=args.accept, branch=args.branch, pr=args.pr,
+        repositories=args.repo,
     )
     print(f'{project} #{task["ref"]} {task["title"]}')
     return 0
@@ -223,6 +244,8 @@ def cmd_brief(store: Store, args) -> int:
         print(f'# {project["name"]}({project["key"]})')
         if project['summary']:
             print(project['summary'])
+        if project['repositories']:
+            print('关联仓库:' + ' · '.join(repo['name'] for repo in project['repositories']))
         line = (f'进度 完成 {counts["done"]} / 进行 {counts["active"]} / '
                 f'等人工 {counts["waiting"]} / 待办 {counts["todo"]}')
         if project['gates']:
@@ -238,7 +261,11 @@ def cmd_brief(store: Store, args) -> int:
             print(f'\n## {label}')
             for task in items[:args.limit]:
                 owner = f'(@{task["owner"]})' if task['owner'] else ''
-                print(f'- #{task["ref"]} {task["title"]}{owner}')
+                repositories = (
+                    ' [' + ' · '.join(repo['name'] for repo in task['repositories']) + ']'
+                    if task['repositories'] else ''
+                )
+                print(f'- #{task["ref"]} {task["title"]}{owner}{repositories}')
                 if task['detail'] and args.verbose:
                     print(f'  {task["detail"]}')
 
@@ -310,13 +337,19 @@ def cmd_stale(store: Store, args) -> int:
 def cmd_set(store: Store, args) -> int:
     key = resolve_project(store, args.project)
     project = store.update_project(
-        key, name=args.name, summary=args.summary, repo=args.repo,
+        key, name=args.name, summary=args.summary,
         artifact_url=args.artifact_url,
         archived=1 if args.archive else (0 if args.unarchive else None),
     )
+    if args.repo is not None:
+        store.set_project_repositories(key, args.repo)
+        project = store.get_project(key)
     print(f'{paint(project["key"], BOLD)} · {project["name"]}')
     if project['artifact_url']:
         print(paint(f'  看板页面 {project["artifact_url"]}', DIM))
+    repositories = store.project_repositories(key)
+    if repositories:
+        print(paint('  仓库 ' + ' · '.join(row['name'] for row in repositories), DIM))
     return 0
 
 
@@ -332,6 +365,10 @@ def cmd_show(store: Store, args) -> int:
     print(paint(f'  状态 {STATUS_LABEL[task["status"]]}'
                 + (f' · 负责 {task["owner"]}' if task['owner'] else '')
                 + (' · 闸门' if task['gate'] else ''), DIM))
+    if task['repositories']:
+        print(paint(
+            '  仓库 ' + ' · '.join(repository['name'] for repository in task['repositories']), DIM,
+        ))
     if task['branch'] or task['pr']:
         bits = [b for b in (task['branch'], f'PR {task["pr"]}' if task['pr'] else None) if b]
         print(paint('  ' + ' · '.join(bits), DIM))
@@ -383,6 +420,10 @@ def cmd_edit(store: Store, args) -> int:
         project, args.ref, title=args.title, detail=args.detail, owner=args.owner, gate=gate,
         accept=args.accept, branch=args.branch, pr=args.pr,
     )
+    if args.repo is not None:
+        if store.project_repositories(project) and not args.repo:
+            raise BoardError('任务至少关联一个需求仓库')
+        store.set_task_repositories(project, args.ref, args.repo)
     print(f'#{task["ref"]} {task["title"]}')
     return 0
 
@@ -515,6 +556,11 @@ def cmd_export(store: Store, args) -> int:
         snapshot['db'] = None
         for project in snapshot['projects']:
             project['repo'] = None
+            for repository in project.get('repositories', []):
+                repository['path'] = None
+            for task in project.get('tasks', []):
+                for repository in task.get('repositories', []):
+                    repository['path'] = None
     if args.json:
         output = render_json(snapshot)
     else:
@@ -546,25 +592,25 @@ def cmd_serve(store: Store, args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog='board', description='跨项目任务看板:CLI 更新进度,本地服务或静态导出查看')
+        prog='board', description='跨对话需求/工作流看板:CLI 更新进度,本地服务或静态导出查看')
     parser.add_argument('--db', help='指定数据库路径(默认 ~/.taskboard/board.db)')
     sub = parser.add_subparsers(dest='command', required=True)
 
     def add_project_flag(sp):
-        sp.add_argument('-p', '--project', help='项目 key(默认按 cwd 归属自动判定)')
+        sp.add_argument('-p', '--project', help='需求 key(参数名为兼容保留;默认按 cwd 归属判定)')
 
-    sp = sub.add_parser('init', help='登记一个项目')
+    sp = sub.add_parser('init', help='登记一个需求/长期工作流')
     sp.add_argument('key')
     sp.add_argument('--name')
-    sp.add_argument('--repo', help='仓库路径,登记后在该目录下自动定位此项目')
+    sp.add_argument('--repo', action='append', help='关联仓库路径;可重复传入')
     sp.add_argument('--summary')
     sp.set_defaults(func=cmd_init)
 
-    sp = sub.add_parser('projects', help='列出所有项目与进度')
+    sp = sub.add_parser('projects', help='列出所有需求与进度(命令名为兼容保留)')
     sp.add_argument('--all', action='store_true', help='含已归档')
     sp.set_defaults(func=cmd_projects)
 
-    sp = sub.add_parser('use', help='固定当前项目')
+    sp = sub.add_parser('use', help='固定当前需求')
     sp.add_argument('key')
     sp.set_defaults(func=cmd_use)
 
@@ -575,6 +621,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument('--accept', help='验收条件,done 时会打印出来对照')
     sp.add_argument('--branch', help='关联分支')
     sp.add_argument('--pr', help='关联 PR')
+    sp.add_argument('--repo', action='append', help='本任务关联仓库名称或路径;可重复传入')
     sp.add_argument('--gate', action='store_true', help='标记为闸门/关键节点')
     sp.add_argument('--blocked-by', help='前置任务 ref,逗号分隔')
     add_project_flag(sp)
@@ -583,7 +630,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser('ls', help='列任务')
     sp.add_argument('--done', action='store_true', help='含已完成')
     sp.add_argument('--all', action='store_true', help='含已放弃')
-    sp.add_argument('-A', '--all-projects', action='store_true', help='所有项目')
+    sp.add_argument('-A', '--all-projects', action='store_true', help='所有需求')
     add_project_flag(sp)
     sp.set_defaults(func=cmd_ls)
 
@@ -612,10 +659,10 @@ def build_parser() -> argparse.ArgumentParser:
     add_project_flag(sp)
     sp.set_defaults(func=cmd_stale)
 
-    sp = sub.add_parser('set', help='改项目属性')
+    sp = sub.add_parser('set', help='改需求属性')
     sp.add_argument('--name')
     sp.add_argument('--summary')
-    sp.add_argument('--repo')
+    sp.add_argument('--repo', action='append', help='替换需求关联仓库;可重复传入')
     sp.add_argument('--artifact-url', dest='artifact_url', help='看板发布链接,更新时复用')
     sp.add_argument('--archive', action='store_true')
     sp.add_argument('--unarchive', action='store_true')
@@ -647,6 +694,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument('--accept')
     sp.add_argument('--branch')
     sp.add_argument('--pr')
+    sp.add_argument('--repo', action='append', help='替换本任务关联仓库;可重复传入')
     sp.add_argument('--gate', action='store_true')
     sp.add_argument('--no-gate', action='store_true')
     add_project_flag(sp)

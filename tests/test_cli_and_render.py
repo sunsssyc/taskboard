@@ -3,7 +3,7 @@ import json
 import pytest
 
 from taskboard.cli import main
-from taskboard.render import render, render_markdown
+from taskboard.render import _fmt_stamp, render, render_markdown
 from taskboard.store import Store
 
 
@@ -16,6 +16,10 @@ def db(tmp_path, monkeypatch):
 
 def run(db, *argv) -> int:
     return main(['--db', db, *argv])
+
+
+def test_format_stamp_uses_utc_plus_8():
+    assert _fmt_stamp('2026-08-21T00:15:00+00:00') == '2026-08-21 08:15 UTC+8'
 
 
 def test_cli_flow_add_start_done(db, capsys):
@@ -76,7 +80,7 @@ def test_cli_resolves_project_from_cwd(db, tmp_path, monkeypatch, capsys):
 
 def test_cli_unknown_project_errors_cleanly(db, capsys):
     assert run(db, 'add', '无主任务', '-p', 'nope') == 1
-    assert '没有这个项目' in capsys.readouterr().err
+    assert '没有这个需求' in capsys.readouterr().err
 
 
 def test_cli_ambiguous_project_errors_cleanly(db, tmp_path, monkeypatch, capsys):
@@ -85,7 +89,31 @@ def test_cli_ambiguous_project_errors_cleanly(db, tmp_path, monkeypatch, capsys)
     capsys.readouterr()
     monkeypatch.chdir(tmp_path)
     assert run(db, 'ls') == 1
-    assert '认不出当前项目' in capsys.readouterr().err
+    assert '认不出当前需求' in capsys.readouterr().err
+
+
+def test_cli_multi_repo_task_requires_explicit_repository(db, tmp_path, capsys):
+    backend = tmp_path / 'coinex_backend'
+    admin = tmp_path / 'coinex_admin_frontend'
+    backend.mkdir()
+    admin.mkdir()
+    assert run(
+        db, 'init', 'multi', '--name', '跨仓库需求',
+        '--repo', str(backend), '--repo', str(admin),
+    ) == 0
+    capsys.readouterr()
+
+    assert run(db, 'add', '未确认仓库', '-p', 'multi') == 1
+    assert '请先和用户确认' in capsys.readouterr().err
+    assert run(db, 'add', '后端任务', '-p', 'multi', '--repo', 'coinex_backend') == 0
+
+    store = Store(db)
+    try:
+        assert [repo['name'] for repo in store.task_repositories('multi', 1)] == [
+            'coinex_backend',
+        ]
+    finally:
+        store.close()
 
 
 def test_cli_export_html_and_json(db, tmp_path, capsys):
@@ -104,11 +132,15 @@ def test_cli_export_html_and_json(db, tmp_path, capsys):
     assert '关键结论' in html and '40/40' in html
     assert db not in html
     assert str(repo) not in html
+    assert 'class="repo-tag">repo</span>' in html
+    assert 'class="chip repo">repo</span>' in html
 
     json_path = tmp_path / 'out.json'
     run(db, 'export', '--json', '--out', str(json_path))
     data = json.loads(json_path.read_text(encoding='utf-8'))
     assert data['projects'][0]['tasks'][0]['title'] == '任务甲'
+    assert data['projects'][0]['repositories'][0]['path'] is None
+    assert data['projects'][0]['tasks'][0]['repositories'][0]['path'] is None
     assert data['db'] is None
     assert data['projects'][0]['repo'] is None
 
@@ -138,7 +170,9 @@ def test_render_uses_xcode_style_light_workspace(tmp_path):
     assert 'color-scheme:light' in html
     assert '--chrome:#f7f7f8' in html
     assert 'grid-template-columns:248px minmax(0,1fr)' in html
-    assert 'class="navigator" aria-label="项目导航"' in html
+    assert 'class="navigator" aria-label="需求导航"' in html
+    assert '<h3>全部需求</h3>' in html
+    assert '<div class="navigator-head"><span>需求</span>' in html
     assert '<main class="content">' in html
     assert 'prefers-color-scheme: dark' not in html
     assert 'background:var(--ground)' in html
@@ -173,11 +207,15 @@ def test_render_long_notes_use_full_width_reading_layout(tmp_path):
     html = render(store.snapshot())
     store.close()
 
-    assert 'class="note finding" id="note-1"' in html
-    assert 'class="note finding long" id="note-2"' in html
+    assert '<details class="note finding" id="note-1"' in html
+    assert '<details class="note finding long" id="note-2"' in html
+    assert html.count('class="note-summary"') >= 2
+    assert 'class="note finding" id="note-1" open' not in html
+    assert 'role="heading" aria-level="4"' in html
     assert 'grid-column:1/-1' in html
     assert 'grid-template-columns:minmax(240px,.75fr) minmax(0,1.8fr)' in html
     assert 'grid-template-columns:48px minmax(0,1fr)' in html
+    assert '.note-summary { min-height:42px' in html
     assert '.notes { display:flex; flex-direction:column' in html
     assert 'overflow-wrap:anywhere' in html
     assert '@media (max-width:760px)' in html
@@ -260,6 +298,11 @@ def test_task_and_note_fields_render_markdown(tmp_path):
     assert 'aria-label="收起 #1 全文"' in html
     assert 'body.hidden = !expanded' in html
     assert '展开全部' not in html
+    assert '<div class="lifecycle" aria-label="节点时间">' in html
+    assert '<b>创建</b><time datetime="' in html
+    assert '<b>首次开始</b>尚未开始' in html
+    assert '<b>最近变更</b><time datetime="' in html
+    assert 'UTC+8</time>' in html
     assert 'class="markdown note-body"' in html
     assert '<blockquote><p>已验证</p></blockquote>' in html
     assert '<a href="docs/check.md">文档</a>' in html
@@ -281,12 +324,20 @@ def test_live_render_has_interactions_but_static_export_stays_read_only(tmp_path
     assert 'class="detail-button"' in live_html
     assert 'data-create="task"' in live_html and 'data-create="finding"' in live_html
     assert 'name="category"' in live_html
+    assert 'name="repositories" multiple' in live_html
+    assert 'data-repositories=' in live_html
+    assert "payload.repositories = data.getAll('repositories')" in live_html
+    assert '<label>需求<select name="project"' in live_html
+    assert "document.querySelector('.pgroup[data-selected] .pcard[data-project]')" in live_html
     assert 'list="finding-categories"' in live_html and '模型口径' in live_html
     assert "var createForm = createDialog ?" in live_html
     assert 'data-status="done"' in live_html
     assert 'data-csrf="test-csrf"' in live_html
     assert '/api/tasks/' in live_html
     assert "current.task.accept ? '\\n\\n验收条件" in live_html
+    assert 'function formatUtc8(value)' in live_html
+    assert "['首次开始', task.first_started_at ? formatUtc8(task.first_started_at) : '尚未开始']" in live_html
+    assert "element('time', '', formatUtc8(event.at))" in live_html
     assert 'inset:0 0 0 auto' in live_html and '--inspector-shadow' in live_html
 
     static_html = render(snapshot)
@@ -367,14 +418,16 @@ def test_render_bridge_mode_clicks_status_via_native_bridge(db):
 
     page = render(snapshot, bridge=True)
     assert 'class="chip todo status-button"' in page
+    assert 'title="点击修改状态" aria-haspopup="menu" aria-expanded="false"' in page
     assert 'id="status-menu"' in page
+    assert "item.setAttribute('aria-checked', String(current))" in page
     assert 'window.__boardSetStatus' in page
     assert 'handlers.boardStatus.postMessage' in page
     assert 'data-csrf' not in page  # 桥接模式没有 serve 的写入 API
     assert 'class="detail-button"' not in page  # 详情依赖 /api,桥接导出不含
 
     plain = render(snapshot)
-    assert 'status-button' not in plain
+    assert 'class="chip todo status-button"' not in plain
     assert 'id="status-menu"' not in plain
 
 
@@ -390,4 +443,4 @@ def test_cli_export_bridge_flag(db, tmp_path, capsys):
 
     plain_out = tmp_path / 'plain.html'
     assert run(db, 'export', '--out', str(plain_out)) == 0
-    assert 'status-button' not in plain_out.read_text(encoding='utf-8')
+    assert 'class="chip todo status-button"' not in plain_out.read_text(encoding='utf-8')

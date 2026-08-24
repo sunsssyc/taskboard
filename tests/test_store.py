@@ -67,6 +67,61 @@ def test_project_for_path_prefers_most_specific(store, tmp_path):
     assert store.project_for_path(tmp_path) is None
 
 
+def test_workstream_and_task_repository_associations(store, tmp_path):
+    backend = tmp_path / 'coinex_backend'
+    admin = tmp_path / 'coinex_admin_frontend'
+    backend.mkdir()
+    admin.mkdir()
+    store.create_project(
+        'cross-repo', '跨仓库需求', repositories=[str(backend), str(admin)],
+    )
+
+    assert [row['name'] for row in store.project_repositories('cross-repo')] == [
+        'coinex_admin_frontend', 'coinex_backend',
+    ]
+    task = store.add_task(
+        'cross-repo', '只改后端', repositories=['coinex_backend'],
+    )
+    assert [row['name'] for row in store.task_repositories('cross-repo', task['ref'])] == [
+        'coinex_backend',
+    ]
+    snapshot = next(
+        project for project in store.snapshot()['projects'] if project['key'] == 'cross-repo'
+    )
+    assert [repo['name'] for repo in snapshot['repositories']] == [
+        'coinex_admin_frontend', 'coinex_backend',
+    ]
+    assert [repo['name'] for repo in snapshot['tasks'][0]['repositories']] == [
+        'coinex_backend',
+    ]
+    reopened = Store(store.path)
+    try:
+        assert [
+            repo['name'] for repo in reopened.task_repositories('cross-repo', task['ref'])
+        ] == ['coinex_backend']
+    finally:
+        reopened.close()
+    with pytest.raises(BoardError, match='未关联到需求'):
+        store.add_task('cross-repo', '越界仓库', repositories=['unknown'])
+    with pytest.raises(BoardError, match='仍被任务'):
+        store.set_project_repositories('cross-repo', [str(admin)])
+    with pytest.raises(BoardError, match='仍被任务'):
+        store.update_project('cross-repo', repo=str(admin))
+    assert [row['name'] for row in store.project_repositories('cross-repo')] == [
+        'coinex_admin_frontend', 'coinex_backend',
+    ]
+
+
+def test_shared_repository_requires_explicit_workstream(store, tmp_path):
+    shared = tmp_path / 'shared'
+    shared.mkdir()
+    store.create_project('shared-a', '需求 A', repositories=[str(shared)])
+    store.create_project('shared-b', '需求 B', repositories=[str(shared)])
+
+    assert {row['key'] for row in store.projects_for_path(shared)} == {'shared-a', 'shared-b'}
+    assert store.project_for_path(shared) is None
+
+
 def test_dropped_tasks_are_not_actionable(store):
     task = store.add_task('demo', '放弃的')
     store.set_status('demo', task['ref'], 'dropped')
@@ -113,6 +168,25 @@ def test_events_are_recorded(store):
     actions = [event['action'] for event in store.events(limit=10, project='demo')]
     assert 'status_changed' in actions
     assert 'task_added' in actions
+
+
+def test_snapshot_derives_first_started_at_from_event_stream(store):
+    task = store.add_task('demo', '生命周期')
+    initial = store.snapshot()['projects'][0]['tasks'][0]
+    assert initial['created_at'] == task['created_at']
+    assert initial['first_started_at'] is None
+
+    store.set_status('demo', task['ref'], 'active')
+    first_event = next(
+        event for event in reversed(store.events(limit=20, project='demo'))
+        if event['action'] == 'status_changed'
+    )
+    first_started = store.snapshot()['projects'][0]['tasks'][0]['first_started_at']
+    assert first_started == first_event['at']
+
+    store.set_status('demo', task['ref'], 'todo')
+    store.set_status('demo', task['ref'], 'active')
+    assert store.snapshot()['projects'][0]['tasks'][0]['first_started_at'] == first_started
 
 
 def test_archived_projects_hidden_by_default(store):

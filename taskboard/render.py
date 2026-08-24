@@ -8,13 +8,14 @@ from __future__ import annotations
 import html
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 
 STATUS_LABEL = {'todo': '待办', 'active': '进行中', 'waiting': '等人工',
                 'done': '已完成', 'dropped': '已放弃'}
 HTML_PREFIX = '<!doctype html><meta charset="utf-8">'
 LONG_NOTE_BODY_CHARS = 320
+UTC_PLUS_8 = timezone(timedelta(hours=8))
 
 
 def html_document(body: str) -> str:
@@ -156,6 +157,10 @@ button.action:focus-visible { outline:0; box-shadow:var(--ring); }
 .step.flash { animation:step-flash 1.2s ease-out; }
 /* live 可写时状态 chip 是按钮,点击弹出状态菜单 */
 button.chip { appearance:none; -webkit-appearance:none; cursor:pointer; }
+button.chip.status-button { display:inline-flex; align-items:center; gap:5px; }
+button.chip.status-button::after { content:''; width:4px; height:4px; flex:none;
+  border-right:1.2px solid currentColor; border-bottom:1.2px solid currentColor;
+  transform:translateY(-1px) rotate(45deg); }
 button.chip:focus-visible { outline:0; box-shadow:var(--ring); }
 .status-menu { position:fixed; z-index:20; min-width:136px; padding:5px; background:var(--surface);
   border:1px solid var(--rule); border-radius:10px;
@@ -187,6 +192,11 @@ button.chip:focus-visible { outline:0; box-shadow:var(--ring); }
 .bar i.active { background:var(--active); }
 .counts { display:flex; flex-wrap:wrap; gap:2px 8px; font-family:var(--mono); font-size:10px; font-variant-numeric:tabular-nums; color:var(--ink-muted); }
 .counts b { font-weight:600; }
+.repo-tags { display:flex; flex-wrap:wrap; gap:3px; min-width:0; }
+.repo-tag { max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  padding:2px 6px; border-radius:999px; background:var(--sunken); color:var(--ink-muted);
+  font-family:var(--mono); font-size:9px; line-height:1.35; }
+.pcard[aria-pressed="true"] .repo-tag { background:rgba(255,255,255,.16); color:rgba(255,255,255,.82); }
 .nextline { font-size:11px; color:var(--ink-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .nextline span { color:var(--ink-faint); }
 
@@ -252,10 +262,14 @@ section[hidden] { display:none; }
 .chip.todo { background:var(--wait-soft); color:var(--wait); }
 .chip.waiting { background:var(--active-soft); color:var(--active); }
 .chip.meta { background:var(--sunken); color:var(--ink-muted); text-transform:none; }
+.chip.repo { background:#eef4fb; color:#49647f; text-transform:none; }
 .accept { font-size:13px; color:var(--ink-muted); border-left:2px solid var(--accent);
           padding-left:9px; }
 .accept b { font-family:var(--mono); font-size:10.5px; letter-spacing:.06em; color:var(--accent);
             text-transform:uppercase; margin-right:6px; }
+.lifecycle { display:flex; flex-wrap:wrap; gap:3px 14px; margin-top:3px;
+  font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); }
+.lifecycle b { margin-right:5px; color:var(--ink-muted); font-weight:500; }
 .task-body[hidden] { display:none; }
 /* 折叠箭头统一为 macOS 式 chevron:右向闭合,展开旋转 90° 向下 */
 summary { list-style:none; }
@@ -342,39 +356,45 @@ details[open] > summary::before { transform:rotate(45deg); }
 .note-group-head span { font-family:var(--mono); font-size:10.5px; color:var(--ink-faint); }
 .note-group > .notes, .note-group > .linklist { margin-top:9px; }
 .note { background:var(--surface); border:0; border-bottom:1px solid var(--rule-soft);
-        border-radius:0; padding:11px 13px; display:flex; flex-direction:column; gap:5px; }
+        border-radius:0; padding:0; display:block; }
 .note:last-child { border-bottom:0; }
 .note:hover { background:rgba(0,0,0,.02); }
 .note.risk { border-left:3px solid var(--alert); }
 .note[id] { scroll-margin-top:18px; }
+.note-summary { min-height:42px; padding:7px 13px 7px 0; display:grid;
+  grid-template-columns:48px minmax(0,1fr); align-items:center; cursor:pointer; }
+.note-summary::before { grid-column:1; justify-self:center; margin:0; }
+.note-summary .note-title { grid-column:2; }
+.note-summary:hover .note-heading { color:var(--accent); }
+.note-summary:focus-visible { outline:2px solid var(--accent); outline-offset:-2px; }
+.note-content { padding:0 13px 11px 48px; display:flex; flex-direction:column; gap:5px; }
 .note-aside { display:flex; flex-direction:column; gap:5px; min-width:0; }
 .note-title { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; }
-.note h4 { margin:0; font-size:13.5px; font-weight:620; }
-.note-title h4 { flex:1 1 180px; }
+.note-heading { min-width:0; flex:1 1 180px; font-size:13.5px; font-weight:620; }
 .note-id { font-family:var(--mono); font-size:11px; color:var(--ink-faint); white-space:nowrap; }
 .note p { margin:0; min-width:0; overflow-wrap:anywhere; font-family:var(--sans); font-size:13.5px;
           line-height:1.65; color:var(--ink); }
 .note .metric { font-family:var(--mono); font-size:11.5px; font-variant-numeric:tabular-nums; color:var(--accent); }
 .note .overturns { font-family:var(--mono); font-size:11px; color:var(--ink-faint); }
-.note.long { grid-column:1/-1; display:grid; grid-template-columns:minmax(240px,.75fr) minmax(0,1.8fr);
-             gap:8px 26px; align-items:start; }
+.note.long { grid-column:1/-1; }
+.note.long .note-content { display:grid;
+  grid-template-columns:minmax(240px,.75fr) minmax(0,1.8fr); gap:8px 26px; align-items:start; }
 .note.long .note-aside { grid-column:1; grid-row:1; }
-.note.long > .markdown { grid-column:2; grid-row:1; max-width:82ch;
-                         border-left:1px solid var(--rule-soft); padding-left:22px; }
+.note.long .note-content > .markdown { grid-column:2; grid-row:1; max-width:82ch;
+                                      border-left:1px solid var(--rule-soft); padding-left:22px; }
 .note-ref { color:inherit; text-decoration:none; text-underline-offset:2px; }
 .note-ref:hover { color:var(--accent); text-decoration:underline; }
 .note-ref:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:2px; }
-.note.superseded { grid-column:1/-1; background:var(--chrome); border:0; padding:8px 12px; }
+.note.superseded { grid-column:1/-1; background:var(--chrome); border:0; padding:0; }
 .note-filter-wrapper { grid-column:1/-1; border-bottom:1px solid var(--rule-soft); }
 .note-filter-wrapper:last-child { border-bottom:0; }
-.note.superseded summary { cursor:pointer; font-size:13px; color:var(--ink-faint); }
-.note.superseded summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.note.superseded .note-summary { color:var(--ink-faint); }
 .note.superseded .tag { display:inline-block; font-family:var(--mono); font-size:10px;
                         letter-spacing:.03em; color:var(--alert); background:var(--alert-soft);
                         border-radius:999px; padding:2px 8px; margin-right:8px;
                         white-space:nowrap; vertical-align:1px; }
 .note.superseded .tag:hover { color:var(--alert); text-decoration:underline; text-underline-offset:2px; }
-.note.superseded .markdown { margin-top:8px; font-size:13.5px; }
+.note.superseded .markdown { font-size:13.5px; }
 @media (max-width:760px) {
   .note.long { display:flex; }
   .note.long > .markdown { max-width:none; border-left:0; padding-left:0; }
@@ -421,6 +441,8 @@ dialog::backdrop { background:rgba(0,0,0,.07); backdrop-filter:none; }
 .create-form label { display:flex; flex-direction:column; gap:4px; font-size:12px;
   color:var(--ink-muted); }
 .create-form textarea { min-height:116px; resize:vertical; }
+.create-form select[multiple] { min-height:88px; }
+.field-hint { font-size:10.5px; color:var(--ink-faint); }
 .form-row { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:11px; }
 [data-task-only][hidden], [data-finding-only][hidden] { display:none; }
 .form-error { min-height:1.4em; color:var(--alert); font-size:12.5px; }
@@ -446,6 +468,11 @@ dialog::backdrop { background:rgba(0,0,0,.07); backdrop-filter:none; }
   .sec-head .key { flex-basis:100%; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .step { grid-template-columns:42px minmax(0,1fr); }
   .node { width:42px; }
+  .note-summary { grid-template-columns:42px minmax(0,1fr); }
+  .note-content { padding-left:42px; }
+  .note.long .note-content { grid-template-columns:1fr; }
+  .note.long .note-aside, .note.long .note-content > .markdown { grid-column:1; grid-row:auto; }
+  .note.long .note-content > .markdown { border-left:0; padding-left:0; }
   .done-fold summary, .active-fold summary, .blocked-fold summary, .dropped-fold summary {
     grid-template-columns:42px minmax(0,1fr); }
   .done-fold > .step, .active-fold > .step,
@@ -473,7 +500,7 @@ FILTER_SCRIPT = """
   var owner = controls && controls.querySelector('[name="owner"]');
   var empty = document.querySelector('.filter-empty');
   var selectedProject = null;
-  var canSwitchProject = cards.length >= 2; // “全部项目”之外至少还有一个项目
+  var canSwitchProject = cards.length >= 2; // “全部需求”之外至少还有一个需求
   var taskDisclosures = Array.prototype.slice.call(document.querySelectorAll('.task-disclosure'));
 
   function setTaskExpanded(button, expanded) {
@@ -587,6 +614,13 @@ FILTER_SCRIPT = """
         group.hidden = !group.querySelector('[data-filter-item]:not([hidden])');
         if (needle && !group.hidden) group.open = true;
       });
+      if (needle) {
+        section.querySelectorAll('details.note').forEach(function (note) {
+          var filterItem = note.matches('[data-filter-item]')
+            ? note : note.closest('[data-filter-item]');
+          if (filterItem && !filterItem.hidden) note.open = true;
+        });
+      }
       section.querySelectorAll('.category-index a').forEach(function (link) {
         var group = document.getElementById(link.getAttribute('href').slice(1));
         link.hidden = Boolean(group && group.hidden);
@@ -806,6 +840,7 @@ INTERACTIVE_SCRIPT = """
   var createForm = createDialog ? createDialog.querySelector('form') : null;
   var createError = createDialog ? createDialog.querySelector('.form-error') : null;
   var categoryMap = createForm ? JSON.parse(createForm.dataset.categories || '{}') : {};
+  var repositoryMap = createForm ? JSON.parse(createForm.dataset.repositories || '{}') : {};
   var current = null;
 
   async function setStatus(target, status) {
@@ -829,6 +864,14 @@ INTERACTIVE_SCRIPT = """
     if (className) node.className = className;
     if (text !== undefined) node.textContent = text;
     return node;
+  }
+
+  function formatUtc8(value) {
+    if (!value) return '—';
+    var parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) return value;
+    return new Date(parsed.getTime() + 8 * 60 * 60 * 1000)
+      .toISOString().slice(0, 16).replace('T', ' ') + ' UTC+8';
   }
 
   async function api(path, options) {
@@ -865,6 +908,23 @@ INTERACTIVE_SCRIPT = """
     });
   }
 
+  function updateRepositoryOptions() {
+    if (!createForm) return;
+    var select = createForm.elements.repositories;
+    if (!select) return;
+    var repositories = repositoryMap[createForm.elements.project.value] || [];
+    select.replaceChildren();
+    repositories.forEach(function (repository) {
+      var option = document.createElement('option');
+      option.value = repository.name;
+      option.textContent = repository.name;
+      option.selected = repositories.length === 1;
+      select.appendChild(option);
+    });
+    select.required = repositories.length > 0;
+    select.closest('label').hidden = repositories.length === 0;
+  }
+
   async function openDetail(button) {
     detailTitle.textContent = '读取中…';
     detailMeta.textContent = button.dataset.project + ' #' + button.dataset.ref;
@@ -878,8 +938,12 @@ INTERACTIVE_SCRIPT = """
       detailMeta.textContent = current.project.name + ' · ' + current.project.key + ' #' + task.ref;
       var grid = element('div', 'detail-grid');
       [['状态', task.status], ['负责人', task.owner || '未指定'], ['分支', task.branch || '—'],
-       ['PR', task.pr || '—'], ['依赖', task.blocked_by.length ? '#' + task.blocked_by.join(', #') : '无'],
-       ['更新', task.updated_at]].forEach(function (pair) {
+       ['PR', task.pr || '—'],
+       ['仓库', (task.repositories || []).length ? task.repositories.map(function (repo) { return repo.name; }).join(' · ') : '未关联'],
+       ['依赖', task.blocked_by.length ? '#' + task.blocked_by.join(', #') : '无'],
+       ['创建', formatUtc8(task.created_at)],
+       ['首次开始', task.first_started_at ? formatUtc8(task.first_started_at) : '尚未开始'],
+       ['最近变更', formatUtc8(task.updated_at)]].forEach(function (pair) {
         var item = element('div');
         var label = element('b', '', pair[0] + '：');
         item.append(label, document.createTextNode(pair[1]));
@@ -894,7 +958,7 @@ INTERACTIVE_SCRIPT = """
         var list = element('div', 'event-list');
         current.events.forEach(function (event) {
           var row = element('div', 'event');
-          row.append(element('time', '', event.at),
+          row.append(element('time', '', formatUtc8(event.at)),
                      element('code', '', event.action + ' ' + JSON.stringify(event.payload)));
           list.appendChild(row);
         });
@@ -918,6 +982,10 @@ INTERACTIVE_SCRIPT = """
     var createButton = event.target.closest('[data-create]');
     if (createButton && createForm) {
       createForm.reset();
+      var selectedDemand = document.querySelector('.pgroup[data-selected] .pcard[data-project]');
+      if (selectedDemand && selectedDemand.dataset.project) {
+        createForm.elements.project.value = selectedDemand.dataset.project;
+      }
       createError.textContent = '';
       createForm.elements.kind.value = createButton.dataset.create;
       createForm.querySelectorAll('[data-task-only]').forEach(function (node) {
@@ -928,6 +996,7 @@ INTERACTIVE_SCRIPT = """
       });
       createDialog.querySelector('h2').textContent = createButton.dataset.create === 'task' ? '新建任务' : '记录结论';
       updateCategoryOptions();
+      updateRepositoryOptions();
       createDialog.showModal();
     }
   });
@@ -963,6 +1032,7 @@ INTERACTIVE_SCRIPT = """
       payload.detail = data.get('body');
       payload.owner = data.get('owner');
       payload.accept = data.get('accept');
+      payload.repositories = data.getAll('repositories');
     } else {
       path = '/api/notes';
       payload.body = data.get('body');
@@ -976,7 +1046,10 @@ INTERACTIVE_SCRIPT = """
       createError.textContent = error.message;
     }
   });
-  if (createForm) createForm.elements.project.addEventListener('change', updateCategoryOptions);
+  if (createForm) createForm.elements.project.addEventListener('change', function () {
+    updateCategoryOptions();
+    updateRepositoryOptions();
+  });
 })();
 </script>
 """
@@ -991,6 +1064,7 @@ STATUS_MENU_SCRIPT = """
   var statusMenuTarget = null;
 
   function closeStatusMenu() {
+    if (statusMenuTarget) statusMenuTarget.setAttribute('aria-expanded', 'false');
     statusMenu.hidden = true;
     statusMenuTarget = null;
   }
@@ -998,8 +1072,11 @@ STATUS_MENU_SCRIPT = """
   function openStatusMenu(button) {
     statusMenuTarget = button;
     statusMenu.querySelectorAll('[data-status]').forEach(function (item) {
-      item.classList.toggle('current', item.dataset.status === button.dataset.status);
+      var current = item.dataset.status === button.dataset.status;
+      item.classList.toggle('current', current);
+      item.setAttribute('aria-checked', String(current));
     });
+    button.setAttribute('aria-expanded', 'true');
     statusMenu.hidden = false;
     var rect = button.getBoundingClientRect();
     var left = Math.min(rect.left, window.innerWidth - statusMenu.offsetWidth - 8);
@@ -1228,7 +1305,10 @@ def render_markdown(value: str | None) -> str:
 
 def _fmt_stamp(iso: str) -> str:
     try:
-        return datetime.fromisoformat(iso).strftime('%Y-%m-%d %H:%M UTC')
+        value = datetime.fromisoformat(iso)
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return value.astimezone(UTC_PLUS_8).strftime('%Y-%m-%d %H:%M UTC+8')
     except (TypeError, ValueError):
         return iso or ''
 
@@ -1241,6 +1321,12 @@ def _project_next(project: dict) -> dict | None:
         if task['actionable']:
             return task
     return None
+
+
+def _repository_tag(repository: dict, class_name: str) -> str:
+    path = repository.get('path')
+    title = f' title="{esc(path)}"' if path else ''
+    return f'<span class="{class_name}"{title}>{esc(repository["name"])}</span>'
 
 
 def _overview_card(project: dict) -> str:
@@ -1257,9 +1343,18 @@ def _overview_card(project: dict) -> str:
         f'<div class="nextline"><span>闸门</span> #{", #".join(str(g) for g in project["gates"])}</div>'
         if project['gates'] else ''
     )
+    repositories = ''.join(
+        _repository_tag(repository, 'repo-tag')
+        for repository in project.get('repositories', [])
+    )
+    repository_tags = (
+        f'<div class="repo-tags" aria-label="关联仓库">{repositories}</div>'
+        if repositories else ''
+    )
     return f"""      <button type="button" class="pcard" data-project="{esc(project['key'])}" aria-pressed="false">
         <div class="key">{esc(project['key'])}</div>
         <h3>{esc(project['name'])}</h3>
+        {repository_tags}
         <div class="bar"><i class="done" style="width:{done_pct:.1f}%"></i><i class="active" style="width:{active_pct:.1f}%"></i></div>
         <div class="counts"><span>完成 <b>{counts['done']}</b></span><span>进行 <b>{counts['active']}</b></span>{f"<span>等人工 <b>{counts['waiting']}</b></span>" if counts.get('waiting') else ''}<span>待办 <b>{counts['todo']}</b></span></div>
         {next_html}{gates}
@@ -1267,7 +1362,7 @@ def _overview_card(project: dict) -> str:
 
 
 def _overview_group(project: dict) -> str:
-    # 侧边栏以项目为大纲节点:卡下挂“当前要动”的任务——进行中、等人工、可开工待办。
+    # 侧边栏以需求/工作流为大纲节点:卡下挂“当前要动”的任务——进行中、等人工、可开工待办。
     # 完成/已放弃/被阻塞的不进大纲,超出上限收成一行计数,保持侧边栏是速览而非清单。
     rank = {'active': 0, 'waiting': 1, 'todo': 2}
     focus = sorted(
@@ -1301,7 +1396,8 @@ def _task_card(task: dict, project: str, live: bool = False,
         chips = [
             f'<button type="button" class="chip {task["status"]} status-button" '
             f'data-project="{esc(project)}" data-ref="{task["ref"]}" data-status="{task["status"]}" '
-            f'data-accept="{esc(task.get("accept") or "")}" title="点击修改状态">'
+            f'data-accept="{esc(task.get("accept") or "")}" title="点击修改状态" '
+            f'aria-haspopup="menu" aria-expanded="false">'
             f'{STATUS_LABEL[task["status"]]}</button>'
         ]
     else:
@@ -1312,6 +1408,8 @@ def _task_card(task: dict, project: str, live: bool = False,
         chips.append('<span class="chip gate">闸门</span>')
     if task['actionable'] and task['status'] == 'todo':
         chips.append('<span class="chip ready">可开工</span>')
+    for repository in task.get('repositories', []):
+        chips.append(_repository_tag(repository, 'chip repo'))
     if task.get('branch'):
         chips.append(f'<span class="chip meta">{esc(task["branch"])}</span>')
     if task.get('pr'):
@@ -1333,19 +1431,42 @@ def _task_card(task: dict, project: str, live: bool = False,
         f'<div class="accept"><b>验收</b>{render_inline_markdown(task["accept"])}</div>'
         if task.get('accept') and task['status'] != 'done' else ''
     )
-    body_html = ''
-    disclosure = f'<span>{task["ref"]}</span>'
-    if detail_html or accept_html or dep_html:
-        hidden = '' if expanded else ' hidden'
-        body_html = f'<div class="task-body"{hidden}>{detail_html}{accept_html}{dep_html}</div>'
-        disclosure = (
-            f'<button type="button" class="task-disclosure" aria-expanded="{str(expanded).lower()}" '
-            f'aria-label="{("收起" if expanded else "展开")} #{task["ref"]} 全文">'
-            f'<span>{task["ref"]}</span></button>'
-        )
+    created_at = task.get('created_at')
+    created_html = (
+        f'<time datetime="{esc(created_at)}">{esc(_fmt_stamp(created_at))}</time>'
+        if created_at else '—'
+    )
+    started_at = task.get('first_started_at')
+    started_html = (
+        f'<time datetime="{esc(started_at)}">{esc(_fmt_stamp(started_at))}</time>'
+        if started_at else '尚未开始'
+    )
+    updated_at = task.get('updated_at')
+    updated_html = (
+        f'<time datetime="{esc(updated_at)}">{esc(_fmt_stamp(updated_at))}</time>'
+        if updated_at else '—'
+    )
+    lifecycle_html = (
+        f'<div class="lifecycle" aria-label="节点时间">'
+        f'<span><b>创建</b>{created_html}</span>'
+        f'<span><b>首次开始</b>{started_html}</span>'
+        f'<span><b>最近变更</b>{updated_html}</span></div>'
+    )
+    hidden = '' if expanded else ' hidden'
+    body_html = (
+        f'<div class="task-body"{hidden}>'
+        f'{detail_html}{accept_html}{dep_html}{lifecycle_html}</div>'
+    )
+    disclosure = (
+        f'<button type="button" class="task-disclosure" aria-expanded="{str(expanded).lower()}" '
+        f'aria-label="{("收起" if expanded else "展开")} #{task["ref"]} 全文">'
+        f'<span>{task["ref"]}</span></button>'
+    )
     search_text = ' '.join(str(task.get(field) or '') for field in (
         'ref', 'title', 'detail', 'accept', 'owner', 'branch', 'pr'
-    )).casefold()
+    )).casefold() + ' ' + ' '.join(
+        repository['name'].casefold() for repository in task.get('repositories', [])
+    )
     detail_button = (
         f'<button type="button" class="detail-button" data-project="{esc(project)}" '
         f'data-ref="{task["ref"]}">详情</button>' if live else ''
@@ -1365,8 +1486,8 @@ def _note_card(note: dict, kind: str) -> str:
     if note.get('is_superseded'):
         # 折叠成一行:保留"曾经这么认为"的痕迹,但不与当前结论争夺注意力
         return f"""      <div class="note-filter-wrapper" data-filter-item data-search="{esc(search_text)}"><details class="note superseded" id="note-{note['id']}">
-        <summary><span class="note-id">[{note['id']}]</span> <a class="tag note-ref" href="#note-{note['superseded_by']}">已被 [{note['superseded_by']}] 推翻</a> {esc(note['title'])}</summary>
-        {f'<div class="markdown">{render_markdown(note["body"])}</div>' if note.get('body') else ''}
+        <summary class="note-summary"><span class="note-title" role="heading" aria-level="4"><span class="note-id">[{note['id']}]</span><span class="note-heading">{esc(note['title'])}</span></span></summary>
+        <div class="note-content"><div class="note-aside"><div class="overturns"><a class="tag note-ref" href="#note-{note['superseded_by']}">已被 [{note['superseded_by']}] 推翻</a></div></div>{f'<div class="markdown">{render_markdown(note["body"])}</div>' if note.get('body') else ''}</div>
       </details></div>"""
     metric = f'<div class="metric">{esc(note["metric"])}</div>' if note.get('metric') else ''
     body_text = note.get('body') or ''
@@ -1380,9 +1501,10 @@ def _note_card(note: dict, kind: str) -> str:
         f'<div class="overturns">推翻了 {overturned_refs}</div>'
         if overturned_refs else ''
     )
-    return f"""      <div class="note {kind}{layout_class}" id="note-{note['id']}" data-filter-item data-search="{esc(search_text)}">
-        <div class="note-aside"><div class="note-title"><span class="note-id">[{note['id']}]</span><h4>{esc(note['title'])}</h4></div>{metric}{overturns}</div>{body}
-      </div>"""
+    return f"""      <details class="note {kind}{layout_class}" id="note-{note['id']}" data-filter-item data-search="{esc(search_text)}">
+        <summary class="note-summary"><span class="note-title" role="heading" aria-level="4"><span class="note-id">[{note['id']}]</span><span class="note-heading">{esc(note['title'])}</span></span></summary>
+        <div class="note-content"><div class="note-aside">{metric}{overturns}</div>{body}</div>
+      </details>"""
 
 
 def _note_groups(notes: list[dict], kind: str, project_key: str) -> str:
@@ -1542,10 +1664,15 @@ def _project_section(project: dict, live: bool = False, status_button: bool = Fa
 {folded}
         </details>"""
     spine = spine or '<p class="empty">还没有任务。</p>'
+    repository_tags = ''.join(
+        _repository_tag(repository, 'repo-tag')
+        for repository in project.get('repositories', [])
+    )
     blocks = [f"""    <section id="p-{esc(project['key'])}" data-project="{esc(project['key'])}" data-kind="tasks">
       <div class="sec-head">
         <h2>{esc(project['name'])}</h2>
-        <span class="key">{esc(project['key'])}{' · ' + esc(project['repo']) if project['repo'] else ''}</span>
+        <span class="key">{esc(project['key'])}</span>
+        {f'<div class="repo-tags" aria-label="关联仓库">{repository_tags}</div>' if repository_tags else ''}
         {f"<p>{esc(project['summary'])}</p>" if project['summary'] else ''}
       </div>
       <div class="spine">
@@ -1628,17 +1755,25 @@ def _dialogs(projects: list[dict], write_enabled: bool) -> str:
             })
             for project in projects
         }
+        repository_map = {
+            project['key']: [
+                {'name': repository['name']} for repository in project.get('repositories', [])
+            ]
+            for project in projects
+        }
         category_data = esc(json.dumps(category_map, ensure_ascii=False))
+        repository_data = esc(json.dumps(repository_map, ensure_ascii=False))
         create_dialog = f"""
   <dialog id="create-dialog">
     <div class="dialog-shell">
       <div class="dialog-head"><div><h2>新建任务</h2><div class="meta">支持 Markdown；复杂编辑仍建议在 Codex 对话中完成</div></div><button type="button" class="action" data-close>关闭</button></div>
-      <form class="dialog-body create-form" data-categories="{category_data}">
+      <form class="dialog-body create-form" data-categories="{category_data}" data-repositories="{repository_data}">
         <input type="hidden" name="kind" value="task">
-        <div class="form-row"><label>项目<select name="project" required>{options}</select></label><label>标题<input name="title" required maxlength="240"></label></div>
+        <div class="form-row"><label>需求<select name="project" required>{options}</select></label><label>标题<input name="title" required maxlength="240"></label></div>
         <label>正文<textarea name="body" placeholder="支持段落、列表、引用、代码块与安全链接"></textarea></label>
+        <label data-task-only>关联仓库<select name="repositories" multiple size="4"></select><span class="field-hint">多仓库需求必须明确选择本任务涉及的仓库</span></label>
         <div class="form-row" data-task-only><label>负责人<input name="owner" placeholder="例如 我"></label><label>验收条件<input name="accept"></label></div>
-        <div class="form-row" data-finding-only hidden><label>分类<input name="category" list="finding-categories" maxlength="40" placeholder="复用本项目已有主题"><datalist id="finding-categories"></datalist></label><label>度量/证据<input name="metric"></label></div>
+        <div class="form-row" data-finding-only hidden><label>分类<input name="category" list="finding-categories" maxlength="40" placeholder="复用本需求已有主题"><datalist id="finding-categories"></datalist></label><label>度量/证据<input name="metric"></label></div>
         <div class="form-error" role="alert"></div>
         <div><button type="submit" class="action primary">保存</button></div>
       </form>
@@ -1670,7 +1805,7 @@ def render(snapshot: dict, title: str = '任务看板', live: bool = False,
 
     all_projects = (
         f'<button type="button" class="pcard all-projects" data-project="" aria-pressed="true">'
-        f'<h3>全部项目</h3><div class="key">{len(projects)} projects</div></button>'
+        f'<h3>全部需求</h3><div class="key">{len(projects)} 个需求</div></button>'
         if projects else ''
     )
     overview = all_projects + ('\n' if all_projects else '') + '\n'.join(
@@ -1682,7 +1817,7 @@ def render(snapshot: dict, title: str = '任务看板', live: bool = False,
         _project_section(project, live=live, status_button=status_button) for project in projects
     )
     if not projects:
-        sections = '<p class="empty">还没有项目。先跑 <code>board init &lt;key&gt; --name "..." --repo .</code></p>'
+        sections = '<p class="empty">还没有需求。先确认目标和关联仓库，再运行 <code>board init &lt;key&gt; --name "..." --repo .</code></p>'
     db_path = (
         f'<span>{esc(snapshot["db"])}</span>'
         if snapshot.get('db') else ''
@@ -1705,11 +1840,11 @@ def render(snapshot: dict, title: str = '任务看板', live: bool = False,
 <style>{STYLE}</style>
 <div class="wrap"{root_attrs}>
   <header class="masthead">
-    <div class="eyebrow">taskboard · 跨项目进度</div>
+    <div class="eyebrow">taskboard · 持久工作流</div>
     <h1>{esc(title)}</h1>
     <div class="meta-line">
       <span>生成于 {_fmt_stamp(snapshot['generated_at'])}</span>
-      <span>{len(projects)} 个项目</span>
+      <span>{len(projects)} 个需求</span>
       <span>完成 {totals['done']} · 进行 {totals['active']}{f" · 等人工 {totals['waiting']}" if totals.get('waiting') else ''} · 待办 {totals['todo']}</span>
       <span>可开工 {actionable}{f" · 闸门 {gate_total}" if gate_total else ''}</span>
     </div>
@@ -1718,15 +1853,15 @@ def render(snapshot: dict, title: str = '任务看板', live: bool = False,
 {toolbar}
 
   <div class="workspace">
-    <aside class="navigator" aria-label="项目导航">
-      <div class="navigator-head"><span>项目</span><b>{len(projects)}</b></div>
+    <aside class="navigator" aria-label="需求导航">
+      <div class="navigator-head"><span>需求</span><b>{len(projects)}</b></div>
       <div class="overview">
 {overview}
       </div>
     </aside>
 
     <main class="content">
-      <div class="filter-note"><span></span><button type="button">显示全部项目</button></div>
+      <div class="filter-note"><span></span><button type="button">显示全部需求</button></div>
       <div class="filter-empty">没有符合当前筛选条件的内容。</div>
 
 {sections}

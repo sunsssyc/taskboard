@@ -1,11 +1,12 @@
 ---
 name: taskboard
-description: 用 board CLI 查看和更新本地跨项目任务看板。适用于接手长任务、询问进度或下一步、记录已定结论与遗留风险，以及导出看板给别人查看。
+description: 用 board CLI 查看和更新跨对话的需求/工作流看板。适用于接手长任务、询问进度或下一步、确认关联仓库、记录已定结论与遗留风险，以及导出看板给别人查看。
 ---
 
 # 任务看板
 
-`board` 是面向个人与 AI Agent 的本地任务看板。数据默认存放在
+`board` 是面向个人与 AI Agent 的本地任务看板。左侧一级实体是可持续推进的**需求/工作流**，
+不是代码仓库；执行任务位于需求之下，仓库是需求和任务的关联标签与交付坐标。数据默认存放在
 `~/.taskboard/board.db`，也可以用 `TASKBOARD_HOME` 或全局 `--db` 覆盖。
 
 如果还没有 `board` 命令，先在 claude-taskboard 源码目录执行：
@@ -25,16 +26,37 @@ board notes    # 有效 finding、risk 和 link
 需要更多上下文时使用 `board brief`、`board ls`、`board show <ref>`、`board log` 或
 `board projects`。
 
-## 确定当前项目
+## 初始化需求前确认目标与仓库
 
-项目解析优先级是：
+只有目标稳定、包含多个步骤、可能跨对话推进的事项才初始化为一级需求。创建前先明确：
 
-1. `-p <key>` 显式指定。
-2. 当前目录落在项目登记的 `repo` 路径下。
-3. `board use <key>` 固定的项目。
-4. 数据库中只有一个未归档项目。
+- 需求名称、一句话目标和范围边界；
+- 涉及哪些代码仓库（允许多个）；
+- 用户是否认可这个需求与仓库集合。
 
-解析失败时要求用户指定，不要猜项目。
+如果仓库是从 cwd、对话或代码引用中推断的，先把候选仓库列给用户确认；用户已经在当前请求中
+明确给出仓库集合时，不重复询问。不要静默把当前目录当成唯一仓库。确认后使用重复的 `--repo`：
+
+```bash
+board init registration-calibration --name "注册模型时代校准" \
+  --summary "修复时代误伤并重构训练数据" \
+  --repo /path/to/coinex_backend \
+  --repo /path/to/coinex_anti_fraud_service \
+  --repo /path/to/coinex_admin_frontend
+```
+
+已有需求可用 `board set -p <key> --repo <path> [--repo <path>...]` 替换关联仓库。
+
+## 确定当前需求
+
+需求解析优先级是：
+
+1. `-p <key>` 显式指定（参数名 `--project` 为兼容保留，语义是需求）。
+2. 当前目录落在需求关联的仓库路径下，且只匹配一个需求。
+3. `board use <key>` 固定的需求。
+4. 数据库中只有一个未归档需求。
+
+同一仓库可能服务多个需求；匹配多个时必须要求用户用 `-p` 指定，不要猜。
 
 ## 推进任务时同步状态
 
@@ -48,6 +70,17 @@ board dep <ref> --on <ref>
 
 标题写成动作，详情说明范围和原因。`--gate` 用于会阻塞大片后续工作的关键节点，
 `--accept` 写可检查的验收条件，`--branch` 和 `--pr` 记录代码坐标。
+
+创建正式任务时同时确定它涉及需求仓库集合中的哪几个仓库。需求只有一个仓库时可自动继承；
+需求涉及多个仓库时，如果当前请求没有明确任务范围，先向用户列出仓库并确认，再重复传 `--repo`：
+
+```bash
+board add "发布三端采样契约" -p registration-calibration \
+  --repo coinex_backend --repo coinex_anti_fraud_service --repo coinex_admin_frontend
+```
+
+不能把需求外的仓库直接挂到任务上；先确认是否扩大需求范围。已有任务用
+`board edit <ref> -p <key> --repo <name> [--repo <name>...]` 修正关联。
 
 ## 用 Markdown 写可扫读内容
 
@@ -85,13 +118,13 @@ board link "path/to/file" --category "关键入口" --body "文件用途"
 board note-category <id...> --category "模型口径"
 ```
 
-同一项目复用 2~6 个稳定分类，使用短名词主题（例如“模型口径”“事实补录”“发布协同”），
+同一需求复用 2~6 个稳定分类，使用短名词主题（例如“模型口径”“事实补录”“发布协同”），
 不要按日期、任务状态或单条结论临时造分类。写新记录前先看 `board notes` 已有分组；没有合适
 主题时再新增。旧记录没有分类时会显示在“未分类”，确认主题后用 `board note-category` 回填。
 
 ### 分类是写入要求
 
-- 写 `finding`、`risk` 或 `link` 前，先运行 `board notes -p <key>`，复用输出中的分类原名。
+- 写 `finding`、`risk` 或 `link` 前，先运行 `board notes -p <key>`，复用该需求已有分类原名。
 - 主题能够判断时必须传 `--category`；不要为了省事把新记录留在“未分类”。
 - 只有现有分类无法覆盖、且新主题预计会复用时才新增分类；分类保持 2~6 个，避免同义词分裂。
 - 分类描述“讨论主题”，不描述日期、任务状态、分支、提交或单条事件。
@@ -111,7 +144,7 @@ board export -p <key> --out board.html
 board export --json --out board.json
 ```
 
-`board serve` 的本机页面可搜索/筛选、查看任务正文与事件历史，并轻量执行状态切换、新建
+`board serve` 的本机页面可按需求搜索/筛选、查看任务正文与事件历史，并轻量执行状态切换、新建
 任务和记录 finding。完成操作会要求确认验收条件，并从任务所属项目登记的 `repo` 读取
 HEAD。复杂依赖、闸门、supersede、风险/文件记录和长篇内容仍使用 CLI；不要为了点网页
 而把结构化信息压成一段难读文本。

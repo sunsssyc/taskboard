@@ -241,6 +241,9 @@ def test_legacy_db_gets_all_new_columns(tmp_path):
         INSERT INTO notes (project, kind, title, created_at)
             VALUES ('demo', 'finding', '老结论', '2026-01-01');
     """)
+    legacy_repo = tmp_path / 'legacy-repo'
+    legacy_repo.mkdir()
+    conn.execute('UPDATE projects SET repo = ? WHERE key = ?', (str(legacy_repo), 'demo'))
     conn.commit()
     conn.close()
 
@@ -250,6 +253,8 @@ def test_legacy_db_gets_all_new_columns(tmp_path):
         assert task['ref'] == 2
         assert store.get_task('demo', 1)['accept'] is None   # 老数据保持原样
         assert store.get_note(1)['category'] is None
+        assert [repo['name'] for repo in store.project_repositories('demo')] == ['legacy-repo']
+        assert [repo['name'] for repo in store.task_repositories('demo', 1)] == ['legacy-repo']
         assert store.set_note_category(1, '历史口径')['category'] == '历史口径'
         store.update_project('demo', artifact_url='https://example.com')
         assert store.get_project('demo')['artifact_url'] == 'https://example.com'
@@ -299,7 +304,7 @@ def test_single_project_keeps_explicit_all_projects_context(tmp_path):
     html = render(store.snapshot())
     store.close()
     assert 'class="pcard all-projects" data-project="" aria-pressed="true"' in html
-    assert '<h3>全部项目</h3><div class="key">1 projects</div>' in html
+    assert '<h3>全部需求</h3><div class="key">1 个需求</div>' in html
 
 
 def test_sidebar_outline_lists_focus_tasks_under_project(tmp_path):
@@ -370,8 +375,9 @@ def test_secondary_active_is_folded_but_expands_to_full_cards(tmp_path):
     assert folded_active.count('class="task-body" hidden') == 2
     assert folded_active.count('class="task-disclosure" aria-expanded="false"') == 2
     assert '展开全部' not in section
-    # 普通待办没有正文,仍然自然收成单行。
-    assert section[ref4:].count('class="task-body"') == 0
+    # 普通待办没有正文,默认仍收成单行；展开后可看节点生命周期。
+    assert section[ref4:].count('class="task-body" hidden') == 1
+    assert section[ref4:].count('class="task-disclosure" aria-expanded="false"') == 1
 
 
 def test_primary_active_prefers_actionable_and_secondary_is_title_only(tmp_path):

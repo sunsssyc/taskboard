@@ -31,7 +31,7 @@ def code_version() -> float:
 
 
 def _git_head(repo: str | None) -> str | None:
-    """完成任务时记录该项目仓库的 HEAD，而不是看板服务自己的 cwd。"""
+    """单仓库任务完成时记录任务关联仓库 HEAD，而不是看板服务 cwd。"""
     if not repo:
         return None
     try:
@@ -156,13 +156,22 @@ def make_handler(db_path: str, title: str, include_archived: bool, dev: bool = F
                 raise store_module.BoardError(f'{key} 不能超过 {max_length} 个字符')
             return value
 
+        @staticmethod
+        def _text_list(data: dict, key: str, max_items: int = 20) -> list[str]:
+            value = data.get(key, [])
+            if not isinstance(value, list) or len(value) > max_items:
+                raise store_module.BoardError(f'{key} 必须是最多 {max_items} 项的列表')
+            if any(not isinstance(item, str) or not item.strip() for item in value):
+                raise store_module.BoardError(f'{key} 中每项都必须是非空文本')
+            return [item.strip() for item in value]
+
         def _task_detail(self, project_key: str, ref: int) -> dict:
             store = self._store()
             try:
                 snapshot = store.snapshot(include_archived=True)
                 project = next((p for p in snapshot['projects'] if p['key'] == project_key), None)
                 if project is None:
-                    raise store_module.BoardError(f'没有这个项目: {project_key}')
+                    raise store_module.BoardError(f'没有这个需求: {project_key}')
                 task = next((t for t in project['tasks'] if t['ref'] == ref), None)
                 if task is None:
                     raise store_module.BoardError(f'{project_key} 里没有任务 #{ref}')
@@ -235,10 +244,13 @@ def make_handler(db_path: str, title: str, include_archived: bool, dev: bool = F
                     detail = self._optional_text(data, 'detail')
                     accept = self._optional_text(data, 'accept', 2_000)
                     owner = self._optional_text(data, 'owner', 120)
+                    repositories = self._text_list(data, 'repositories')
+                    if store.project_repositories(project) and not repositories:
+                        raise store_module.BoardError('请先确认并选择本任务关联仓库')
                     store_module.validate_markdown_newlines(detail, accept)
                     task = store.add_task(
                         project, title_value, detail=detail,
-                        owner=owner, accept=accept,
+                        owner=owner, accept=accept, repositories=repositories,
                     )
                     self._json({'ok': True, 'project': project, 'ref': task['ref']}, 201)
                     return
@@ -262,8 +274,11 @@ def make_handler(db_path: str, title: str, include_archived: bool, dev: bool = F
                     status = self._required_text(data, 'status')
                     if status not in WEB_STATUSES:
                         raise store_module.BoardError('网页只允许 todo/active/waiting/done')
-                    project_row = store.get_project(project)
-                    sha = _git_head(project_row['repo']) if status == 'done' else None
+                    task_repositories = store.task_repositories(project, ref)
+                    sha = (
+                        _git_head(task_repositories[0]['path'])
+                        if status == 'done' and len(task_repositories) == 1 else None
+                    )
                     task = store.set_status(project, ref, status, commit_sha=sha)
                     self._json({'ok': True, 'project': project, 'ref': ref,
                                 'status': task['status'], 'commit': sha})

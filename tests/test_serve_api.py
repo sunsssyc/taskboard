@@ -147,6 +147,43 @@ def test_live_page_create_task_finding_and_read_detail(tmp_path):
     store.close()
 
 
+def test_live_create_task_requires_repository_for_multi_repo_workstream(tmp_path):
+    backend = tmp_path / 'coinex_backend'
+    admin = tmp_path / 'coinex_admin_frontend'
+    backend.mkdir()
+    admin.mkdir()
+    db_path = tmp_path / 'multi.db'
+    store = Store(db_path)
+    store.create_project(
+        'multi', '跨仓库需求', repositories=[str(backend), str(admin)],
+    )
+    store.close()
+
+    with running_server(db_path) as port:
+        payload = {
+            'project': 'multi', 'title': '后端任务', 'detail': '',
+            'accept': '', 'owner': '我', 'repositories': [],
+        }
+        status, _, value = request(
+            port, 'POST', '/api/tasks', json.dumps(payload).encode(), write_headers(port),
+        )
+        assert status == 400 and '选择本任务关联仓库' in value['error']
+
+        payload['repositories'] = ['coinex_backend']
+        status, _, value = request(
+            port, 'POST', '/api/tasks', json.dumps(payload).encode(), write_headers(port),
+        )
+        assert status == 201 and value['ref'] == 1
+
+    store = Store(db_path)
+    try:
+        assert [repo['name'] for repo in store.task_repositories('multi', 1)] == [
+            'coinex_backend',
+        ]
+    finally:
+        store.close()
+
+
 def test_done_records_head_from_target_project_repo(tmp_path):
     repo = tmp_path / 'target-repo'
     repo.mkdir()
