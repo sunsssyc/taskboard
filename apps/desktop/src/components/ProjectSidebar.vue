@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, ref } from "vue";
+import { computed, onBeforeUnmount, ref } from "vue";
 import type { BoardProject, BoardTask } from "../types";
 
 const props = defineProps<{
@@ -14,8 +14,24 @@ const props = defineProps<{
 const draggingKey = ref("");
 const dropTargetKey = ref("");
 const dropBefore = ref(true);
+const dragPointerX = ref(0);
+const dragPointerY = ref(0);
+const dropConfirmedKey = ref("");
+const dropNotice = ref("");
+let dropNoticeTimer: number | undefined;
 let pointerDrag: { key: string; startX: number; startY: number; active: boolean } | null = null;
 let suppressClickKey = "";
+
+const draggingProject = computed(() =>
+  props.projects.find((project) => project.key === draggingKey.value),
+);
+const dropTargetProject = computed(() =>
+  props.projects.find((project) => project.key === dropTargetKey.value),
+);
+const dragHint = computed(() => {
+  if (!dropTargetProject.value) return "拖到目标需求的前方或后方";
+  return `移到「${dropTargetProject.value.name}」${dropBefore.value ? "前方" : "后方"}`;
+});
 
 function total(project: BoardProject): number {
   return Object.values(project.counts).reduce((sum, count) => sum + count, 0);
@@ -50,9 +66,12 @@ function isPinned(key: string): boolean {
 }
 
 function clearDragState() {
+  document.body.classList.remove("project-drag-active");
   draggingKey.value = "";
   dropTargetKey.value = "";
   dropBefore.value = true;
+  dragPointerX.value = 0;
+  dragPointerY.value = 0;
 }
 
 function removePointerListeners() {
@@ -79,8 +98,11 @@ function onPointerMove(event: PointerEvent) {
     if (distance < 6) return;
     pointerDrag.active = true;
     draggingKey.value = pointerDrag.key;
+    document.body.classList.add("project-drag-active");
   }
   event.preventDefault();
+  dragPointerX.value = event.clientX;
+  dragPointerY.value = event.clientY;
   const target = document
     .elementFromPoint(event.clientX, event.clientY)
     ?.closest<HTMLElement>(".project-group");
@@ -100,7 +122,16 @@ function onPointerMove(event: PointerEvent) {
 
 function onPointerUp() {
   if (pointerDrag?.active && dropTargetKey.value) {
+    const target = dropTargetProject.value;
+    const placement = dropBefore.value ? "前方" : "后方";
     emit("reorder", pointerDrag.key, dropTargetKey.value, dropBefore.value);
+    dropConfirmedKey.value = dropTargetKey.value;
+    dropNotice.value = target ? `已移到「${target.name}」${placement}` : "需求顺序已更新";
+    window.clearTimeout(dropNoticeTimer);
+    dropNoticeTimer = window.setTimeout(() => {
+      dropConfirmedKey.value = "";
+      dropNotice.value = "";
+    }, 950);
     suppressClickKey = pointerDrag.key;
     window.setTimeout(() => { suppressClickKey = ""; }, 0);
   }
@@ -124,7 +155,9 @@ const emit = defineEmits<{
 
 onBeforeUnmount(() => {
   pointerDrag = null;
+  window.clearTimeout(dropNoticeTimer);
   removePointerListeners();
+  clearDragState();
 });
 </script>
 
@@ -157,6 +190,7 @@ onBeforeUnmount(() => {
           dragging: draggingKey === project.key,
           'drop-before': dropTargetKey === project.key && dropBefore,
           'drop-after': dropTargetKey === project.key && !dropBefore,
+          'drop-confirmed': dropConfirmedKey === project.key,
         }"
       >
         <button
@@ -246,4 +280,27 @@ onBeforeUnmount(() => {
       </span>
     </footer>
   </aside>
+
+  <Teleport to="body">
+    <Transition name="drag-preview">
+      <div
+        v-if="draggingProject"
+        class="project-drag-preview"
+        :style="{ left: `${dragPointerX}px`, top: `${dragPointerY}px` }"
+        aria-hidden="true"
+      >
+        <span class="drag-grip">⋮⋮</span>
+        <span class="drag-preview-copy">
+          <code>{{ draggingProject.key }}</code>
+          <strong>{{ draggingProject.name }}</strong>
+          <small>{{ dragHint }}</small>
+        </span>
+      </div>
+    </Transition>
+    <Transition name="drop-notice">
+      <div v-if="dropNotice" class="project-drop-notice" aria-live="polite">
+        <span aria-hidden="true">✓</span>{{ dropNotice }}
+      </div>
+    </Transition>
+  </Teleport>
 </template>
