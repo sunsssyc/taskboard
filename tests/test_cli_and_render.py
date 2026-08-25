@@ -116,6 +116,32 @@ def test_cli_multi_repo_task_requires_explicit_repository(db, tmp_path, capsys):
         store.close()
 
 
+def test_cli_repo_move_restores_cwd_detection_after_rename(db, tmp_path, monkeypatch, capsys):
+    old = tmp_path / 'claude-taskboard'
+    old.mkdir()
+    other = tmp_path / 'other'
+    other.mkdir()
+    assert run(db, 'init', 'tb', '--name', '看板', '--repo', str(old)) == 0
+    assert run(db, 'init', 'other', '--name', '别的', '--repo', str(other)) == 0
+    assert run(db, 'add', '既有任务', '-p', 'tb') == 0
+    new = tmp_path / 'taskboard'
+    old.rename(new)
+    capsys.readouterr()
+
+    monkeypatch.chdir(new)
+    assert run(db, 'ls') == 1  # 路径还是旧的,cwd 认不出需求
+    assert '认不出当前需求' in capsys.readouterr().err
+    assert run(db, 'set', '-p', 'tb', '--repo', str(new)) == 1
+    assert '仍被任务' in capsys.readouterr().err
+
+    assert run(db, 'repo-move', 'claude-taskboard', str(new)) == 0
+    out = capsys.readouterr().out
+    assert 'claude-taskboard' in out and str(new) in out and '任务关联 1 条' in out
+
+    assert run(db, 'ls') == 0
+    assert '既有任务' in capsys.readouterr().out
+
+
 def test_cli_export_html_and_json(db, tmp_path, capsys):
     repo = tmp_path / 'repo'
     repo.mkdir()

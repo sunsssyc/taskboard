@@ -122,6 +122,84 @@ def test_shared_repository_requires_explicit_workstream(store, tmp_path):
     assert store.project_for_path(shared) is None
 
 
+def test_move_repository_keeps_existing_task_associations(store, tmp_path):
+    old = tmp_path / 'claude-taskboard'
+    old.mkdir()
+    store.create_project('tb', '看板', repositories=[str(old)])
+    task = store.add_task('tb', '既有任务')
+    new = tmp_path / 'taskboard'
+    old.rename(new)
+
+    # 换路径这件事 set --repo 做不到:旧路径不在新集合里就被当成解除关联
+    with pytest.raises(BoardError, match='仍被任务'):
+        store.set_project_repositories('tb', [str(new)])
+
+    result = store.move_repository(str(old), str(new))
+
+    assert result['previous_name'] == 'claude-taskboard'
+    assert (result['projects'], result['tasks'], result['merged']) == (['tb'], 1, False)
+    assert [row['name'] for row in store.project_repositories('tb')] == ['taskboard']
+    assert [row['path'] for row in store.project_repositories('tb')] == [str(new)]
+    assert [row['name'] for row in store.task_repositories('tb', task['ref'])] == ['taskboard']
+    assert store.project_for_path(new)['key'] == 'tb'
+    # 旧的单 repo 兼容字段也跟上,避免和关联表两处不一致
+    assert store.get_project('tb')['repo'] == str(new)
+
+
+def test_move_repository_requires_merge_when_target_registered(store, tmp_path):
+    old = tmp_path / 'old'
+    new = tmp_path / 'new'
+    old.mkdir()
+    new.mkdir()
+    store.create_project('p1', 'P1', repositories=[str(old)])
+    store.create_project('p2', 'P2', repositories=[str(new)])
+    task = store.add_task('p1', '旧仓库任务')
+
+    with pytest.raises(BoardError, match='--merge'):
+        store.move_repository(str(old), str(new))
+
+    result = store.move_repository(str(old), str(new), merge=True)
+
+    assert result['merged'] is True
+    assert [row['path'] for row in store.project_repositories('p1')] == [str(new)]
+    assert [row['name'] for row in store.task_repositories('p1', task['ref'])] == ['new']
+    # 旧登记行已合并掉,不再留下一条指向不存在路径的仓库
+    assert str(old) not in [row['path'] for row in store.repositories()]
+
+
+def test_move_repository_guards_missing_target_and_flags_name_clash(store, tmp_path):
+    first = tmp_path / 'a' / 'foo'
+    second = tmp_path / 'b' / 'bar'
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+    store.create_project('clash', '同名', repositories=[str(first), str(second)])
+    store.add_task('clash', '两个仓库', repositories=['foo', 'bar'])
+
+    with pytest.raises(BoardError, match='不存在或不是目录'):
+        store.move_repository(str(second), str(tmp_path / 'c' / 'foo'))
+
+    renamed = tmp_path / 'c' / 'foo'
+    renamed.parent.mkdir()
+    second.rename(renamed)
+    result = store.move_repository(str(second), str(renamed))
+
+    # 改完两个仓库同名,按名字选仓库会歧义,调用方需要提示用户改传路径
+    assert result['conflicts'] == ['clash']
+    with pytest.raises(BoardError, match='不唯一'):
+        store.add_task('clash', '按名字选', repositories=['foo'])
+    assert store.add_task('clash', '按路径选', repositories=[str(renamed)])['ref']
+
+
+def test_move_repository_force_accepts_absent_target(store, tmp_path):
+    old = tmp_path / 'present'
+    old.mkdir()
+    store.create_project('later', '还没落地', repositories=[str(old)])
+    target = tmp_path / 'not-yet'
+
+    store.move_repository(str(old), str(target), force=True)
+
+    assert [row['path'] for row in store.project_repositories('later')] == [str(target)]
+
 def test_dropped_tasks_are_not_actionable(store):
     task = store.add_task('demo', '放弃的')
     store.set_status('demo', task['ref'], 'dropped')

@@ -261,6 +261,17 @@ npm run tauri dev
 
 同一仓库可服务多个需求；出现多个匹配时会报错要求 `-p` 指定,不会猜。
 
+仓库在磁盘上改名或搬家后,用 `board repo-move <原名或原路径> <新路径>` 迁移登记路径,已有
+需求与任务关联跟着走(关联表存的是仓库 id,不需要逐个改任务)。`board set --repo` 做不到:
+它按路径集合做增删,旧路径不在新集合里就当成解除关联,会被"仓库仍被任务使用"挡下。
+
+```bash
+board repo-move claude-taskboard ~/Documents/GitHub/taskboard
+```
+
+新路径不存在时会拒绝执行(防拼错),确认无误可加 `--force`；新路径已经登记成另一个仓库时,
+加 `--merge` 把旧仓库的关联并过去并删掉旧登记。
+
 ## 开发
 
 ```bash
@@ -280,6 +291,8 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 `UNIQUE(project, ref)` 双保险,多个 CLI 进程同时写不会重号。
 升级:新版本打开老库会把旧 `projects.repo` 自动回填到需求与既有任务的仓库关联表,
 不需要单独的迁移命令。
+仓库路径变化用 `board repo-move` 就地改 `repositories.path`,`project_repositories` 与
+`task_repositories` 按 id 引用,自动跟随。
 
 ### 发布 Homebrew Formula
 

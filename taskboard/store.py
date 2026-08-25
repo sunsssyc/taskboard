@@ -311,6 +311,110 @@ class Store:
         self.conn.commit()
         return self.project_repositories(project)
 
+    def repositories(self) -> list[sqlite3.Row]:
+        return list(self.conn.execute(
+            'SELECT id, name, path FROM repositories ORDER BY name, path',
+        ))
+
+    def find_repository(self, token: str) -> sqlite3.Row:
+        """按完整路径或仓库名定位已登记仓库;名字撞车时要求传路径。"""
+        resolved = str(Path(token).expanduser().resolve())
+        row = self.conn.execute(
+            'SELECT id, name, path FROM repositories WHERE path = ?', (resolved,),
+        ).fetchone()
+        if row is not None:
+            return row
+        matches = list(self.conn.execute(
+            'SELECT id, name, path FROM repositories WHERE name = ? ORDER BY path', (token,),
+        ))
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            paths = ' · '.join(match['path'] for match in matches)
+            raise BoardError(f'仓库名 {token} 不唯一,请传完整路径:{paths}')
+        known = ' · '.join(repository['name'] for repository in self.repositories())
+        raise BoardError(f'没有登记过仓库 {token};已登记:{known or "(无)"}')
+
+    def move_repository(self, old: str, new: str, *,
+                        merge: bool = False, force: bool = False) -> dict:
+        """仓库在磁盘上改名/搬家后,把登记的路径改过去,已有关联跟着走。
+
+        需求和任务关联存的是 repositories.id,所以改这一行的 path 就够了,不必逐个改任务
+        ——这正是 `board set --repo` 做不到的:它按路径集合做增删,旧路径不在新集合里就
+        当成解除关联,被"仓库仍被任务使用"挡下。
+        """
+        source = self.find_repository(old)
+        target_path = str(Path(new).expanduser().resolve())
+        if target_path == source['path']:
+            raise BoardError(f'仓库 {source["name"]} 已经登记为 {target_path}')
+        if not force and not Path(target_path).is_dir():
+            raise BoardError(f'{target_path} 不存在或不是目录;确认路径,或加 --force 照样登记')
+        target_name = Path(target_path).name or target_path
+        existing = self.conn.execute(
+            'SELECT id, name, path FROM repositories WHERE path = ?', (target_path,),
+        ).fetchone()
+        if existing is not None and not merge:
+            raise BoardError(
+                f'{target_path} 已登记为仓库 {existing["name"]};'
+                f'确认要把 {source["name"]} 的关联并进去,就加 --merge'
+            )
+        affected_projects = [row['project'] for row in self.conn.execute(
+            'SELECT project FROM project_repositories WHERE repository_id = ? ORDER BY project',
+            (source['id'],),
+        )]
+        affected_tasks = int(self.conn.execute(
+            'SELECT COUNT(*) FROM task_repositories WHERE repository_id = ?', (source['id'],),
+        ).fetchone()[0])
+        if not self.conn.in_transaction:
+            self.conn.execute('BEGIN IMMEDIATE')
+        try:
+            if existing is None:
+                self.conn.execute(
+                    'UPDATE repositories SET path = ?, name = ? WHERE id = ?',
+                    (target_path, target_name, source['id']),
+                )
+            else:
+                # 目标路径已在册:关联挪到目标行,再删旧行(级联清掉它剩下的关联)
+                self.conn.execute(
+                    'INSERT OR IGNORE INTO project_repositories (project, repository_id) '
+                    'SELECT project, ? FROM project_repositories WHERE repository_id = ?',
+                    (existing['id'], source['id']),
+                )
+                self.conn.execute(
+                    'INSERT OR IGNORE INTO task_repositories (task_id, repository_id) '
+                    'SELECT task_id, ? FROM task_repositories WHERE repository_id = ?',
+                    (existing['id'], source['id']),
+                )
+                self.conn.execute('DELETE FROM repositories WHERE id = ?', (source['id'],))
+            # projects.repo 是旧库兼容字段,但 init/set 仍在写它,一起跟上免得两处不一致
+            self.conn.execute(
+                'UPDATE projects SET repo = ?, updated_at = ? WHERE repo = ?',
+                (target_path, now_iso(), source['path']),
+            )
+            self.log_event(
+                'repository_moved', from_path=source['path'], to_path=target_path,
+                merged=existing is not None, projects=affected_projects,
+                tasks=affected_tasks,
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        # 改名后同一需求下可能出现两个同名仓库,--repo 传名字会歧义,交给调用方提示
+        conflicts = [
+            key for key in affected_projects
+            if [row['name'] for row in self.project_repositories(key)].count(target_name) > 1
+        ]
+        return {
+            'repository': self.find_repository(target_path),
+            'previous_path': source['path'],
+            'previous_name': source['name'],
+            'merged': existing is not None,
+            'projects': affected_projects,
+            'tasks': affected_tasks,
+            'conflicts': conflicts,
+        }
+
     def create_project(self, key: str, name: str, repo: str | None = None,
                        summary: str | None = None,
                        repositories: list[str] | None = None) -> sqlite3.Row:
