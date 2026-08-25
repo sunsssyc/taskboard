@@ -353,6 +353,25 @@ def cmd_set(store: Store, args) -> int:
     return 0
 
 
+def cmd_repo_move(store: Store, args) -> int:
+    result = store.move_repository(
+        args.old, args.new, merge=args.merge, force=args.force,
+    )
+    repository = result['repository']
+    verb = '的关联已并入' if result['merged'] else '已迁移为'
+    print(f'仓库 {paint(result["previous_name"], BOLD)} {verb} '
+          f'{paint(repository["name"], BOLD)} · {repository["path"]}')
+    print(paint(f'  原路径 {result["previous_path"]}', DIM))
+    projects = ' · '.join(result['projects']) or '(无)'
+    print(paint(f'  跟随更新:需求 {projects},任务关联 {result["tasks"]} 条', DIM))
+    for key in result['conflicts']:
+        print(paint(
+            f'  注意:需求 {key} 下现在有两个仓库都叫 {repository["name"]},'
+            f'--repo 要传完整路径才不歧义', RED,
+        ))
+    return 0
+
+
 def cmd_show(store: Store, args) -> int:
     project = resolve_project(store, args.project)
     snapshot = store.snapshot(include_archived=True)
@@ -668,6 +687,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument('--unarchive', action='store_true')
     add_project_flag(sp)
     sp.set_defaults(func=cmd_set)
+
+    sp = sub.add_parser('repo-move', help='仓库改名/搬家后迁移登记路径,已有需求与任务关联跟着走')
+    sp.add_argument('old', help='原仓库名或路径')
+    sp.add_argument('new', help='新路径')
+    sp.add_argument('--merge', action='store_true',
+                    help='新路径已登记为另一个仓库时,把旧仓库的关联并过去并删掉旧登记')
+    sp.add_argument('--force', action='store_true', help='新路径当前不存在也照样登记')
+    sp.set_defaults(func=cmd_repo_move)
 
     sp = sub.add_parser('show', help='看单个任务')
     sp.add_argument('ref', type=int)

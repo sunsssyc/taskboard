@@ -47,6 +47,9 @@ board init registration-calibration --name "注册风控模型校准" \
 
 已有需求可用 `board set -p <key> --repo <path> [--repo <path>...]` 替换关联仓库。
 
+仓库只是改名或换了目录时,用 `board repo-move <原名或原路径> <新路径>` 迁移,已有任务关联
+跟着走；此时不要用 `board set --repo`,它会把旧路径当成解除关联而被任务占用挡下。
+
 ## 确定当前需求
 
 需求解析优先级是：
