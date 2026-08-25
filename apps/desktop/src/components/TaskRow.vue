@@ -1,10 +1,15 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import MarkdownBlock from "./MarkdownBlock.vue";
-import type { BoardTask } from "../types";
+import { useBoardStore } from "../stores/board";
+import type { BoardTask, TaskStatus } from "../types";
 
-const props = defineProps<{ task: BoardTask; query: string }>();
+const props = defineProps<{ task: BoardTask; projectKey: string; query: string }>();
+const board = useBoardStore();
 const expanded = ref(props.task.status === "active");
+const rootElement = ref<HTMLElement | null>(null);
+const menuOpen = ref(false);
+const confirmingDone = ref(false);
 
 watch(
   () => props.query,
@@ -12,6 +17,55 @@ watch(
     if (query.trim()) expanded.value = true;
   },
 );
+
+const statusOptions: { value: TaskStatus; label: string }[] = [
+  { value: "todo", label: "待办" },
+  { value: "active", label: "进行中" },
+  { value: "waiting", label: "等人工" },
+  { value: "done", label: "已完成" },
+];
+
+const switchableOptions = computed(() =>
+  statusOptions.filter((option) => option.value !== props.task.status),
+);
+
+function closeMenu() {
+  menuOpen.value = false;
+  confirmingDone.value = false;
+}
+
+function toggleMenu() {
+  if (menuOpen.value) closeMenu();
+  else menuOpen.value = true;
+}
+
+function chooseStatus(status: TaskStatus) {
+  if (status === "done") {
+    confirmingDone.value = true;
+    return;
+  }
+  applyStatus(status);
+}
+
+function applyStatus(status: TaskStatus) {
+  closeMenu();
+  void board.setTaskStatus(props.projectKey, props.task.ref, status);
+}
+
+function onDocumentPointerDown(event: MouseEvent) {
+  if (!(event.target instanceof Node) || !rootElement.value?.contains(event.target)) {
+    closeMenu();
+  }
+}
+
+watch(menuOpen, (open) => {
+  if (open) document.addEventListener("mousedown", onDocumentPointerDown);
+  else document.removeEventListener("mousedown", onDocumentPointerDown);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("mousedown", onDocumentPointerDown);
+});
 
 const statusLabel = computed(() => {
   if (props.task.status === "active") return "进行中";
@@ -47,6 +101,7 @@ function formatTime(value: string | null): string {
 
 <template>
   <article
+    ref="rootElement"
     class="task-row"
     :class="[`status-${task.status}`, { expanded }]"
     :data-ref="task.ref"
@@ -54,7 +109,7 @@ function formatTime(value: string | null): string {
     <button
       type="button"
       class="task-row-head"
-      :disabled="!hasDetails"
+      :class="{ static: !hasDetails }"
       :aria-expanded="hasDetails ? expanded : undefined"
       @click="hasDetails && (expanded = !expanded)"
     >
@@ -68,8 +123,44 @@ function formatTime(value: string | null): string {
           {{ repository.name }}
         </span>
       </span>
-      <span class="status-chip" :class="statusClass">{{ statusLabel }}</span>
+      <span
+        class="status-chip status-chip-button"
+        :class="statusClass"
+        role="button"
+        tabindex="0"
+        aria-haspopup="menu"
+        :aria-expanded="menuOpen"
+        title="点击切换状态"
+        @click.stop="toggleMenu"
+        @keydown.enter.stop.prevent="toggleMenu"
+        @keydown.space.stop.prevent="toggleMenu"
+      >{{ statusLabel }}</span>
     </button>
+
+    <div v-if="menuOpen" class="status-menu" role="menu" aria-label="切换任务状态">
+      <template v-if="!confirmingDone">
+        <button
+          v-for="option in switchableOptions"
+          :key="option.value"
+          type="button"
+          role="menuitem"
+          class="status-menu-item"
+          @click="chooseStatus(option.value)"
+        >
+          <span class="status-dot" :class="`status-${option.value}`" aria-hidden="true"></span>
+          {{ option.label }}
+        </button>
+      </template>
+      <div v-else class="status-confirm">
+        <strong>确认完成 #{{ task.ref }}?</strong>
+        <MarkdownBlock v-if="task.accept" :text="task.accept" />
+        <span v-else class="status-confirm-hint">该任务没有登记验收条件。</span>
+        <div class="status-confirm-actions">
+          <button type="button" class="secondary-button" @click="closeMenu">取消</button>
+          <button type="button" class="primary-button" @click="applyStatus('done')">确认完成</button>
+        </div>
+      </div>
+    </div>
 
     <div v-if="expanded && hasDetails" class="task-detail">
       <MarkdownBlock v-if="task.detail" :text="task.detail" />

@@ -715,6 +715,57 @@ body.project-drag-active {
 .status-chip.status-dropped { color: var(--ink-muted); background: var(--sunken); }
 .gate-chip { color: #6748aa; background: #f0ebfb; }
 
+.status-chip-button { cursor: pointer; user-select: none; }
+.status-chip-button:hover { box-shadow: inset 0 0 0 1px rgb(0 0 0 / 14%); }
+.status-chip-button:focus-visible { outline: none; box-shadow: var(--ring); }
+
+.status-menu {
+  position: absolute;
+  z-index: 30;
+  top: 38px;
+  right: 12px;
+  min-width: 128px;
+  padding: 4px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 14%);
+}
+.status-menu-item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.status-menu-item:hover { background: var(--sunken); }
+.status-dot { width: 8px; height: 8px; flex: none; border-radius: 50%; }
+.status-dot.status-todo { background: var(--done); }
+.status-dot.status-active { background: var(--active); }
+.status-dot.status-waiting { background: var(--wait); }
+.status-dot.status-done { background: var(--ink-faint); }
+
+.status-confirm {
+  display: flex;
+  max-width: 300px;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  font-size: 12px;
+}
+.status-confirm .markdown-block { max-height: 180px; overflow: auto; font-size: 11.5px; }
+.status-confirm-hint { color: var(--ink-muted); }
+.status-confirm-actions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.task-row-head.static { cursor: default; }
+.task-row-head.static:hover { background: transparent; }
+
 .task-detail { padding: 1px 20px 14px 67px; color: var(--ink-muted); }
 .markdown-block { max-width: 850px; font-size: 12px; line-height: 1.58; }
 .markdown-line { min-height: 1.2em; }

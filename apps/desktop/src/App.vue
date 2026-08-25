@@ -26,6 +26,7 @@ const {
   source,
   loading,
   error,
+  actionError,
   projects,
   orderedProjects,
   displayProjects,
@@ -231,6 +232,10 @@ onBeforeUnmount(() => {
           </div>
           <div v-else-if="error" class="inline-error" role="alert">
             刷新失败，继续显示上一次数据：{{ error }}
+          </div>
+
+          <div v-if="actionError" class="inline-error" role="alert">
+            状态更新失败：{{ actionError }}
           </div>
 
           <div v-if="filterActive" class="active-filter-note">

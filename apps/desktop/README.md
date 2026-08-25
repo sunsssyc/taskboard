@@ -1,16 +1,20 @@
 # Taskboard Desktop POC
 
-Tauri v2 + Vue 3 + TypeScript + Pinia 的只读桌面验证。它保留 Python `board` CLI、
+Tauri v2 + Vue 3 + TypeScript + Pinia 的桌面验证。它保留 Python `board` CLI、
 SQLite 数据模型和现有 Swift 菜单栏 App，不在 Vue 或 Rust 中复制依赖判断、事件记录或写入语义。
 
 ## 数据链路
 
 ```text
-Vue UI → Tauri load_board command → board export --json → SQLite
+读取  Vue UI → Tauri load_board command → board export --json → SQLite
+状态  Vue UI → Tauri set_task_status command → board todo/start/wait/done → SQLite
 ```
 
-Rust command 只允许执行 `export --json --show-paths --out -`。任务状态、新建记录和 SQLite
-仍保持只读；需求拖动顺序与置顶状态通过数据库旁的 `*.view.json` sidecar 与 Swift 版共享。
+Rust 侧只允许 `export --json --show-paths --out -` 读取，以及与 `board serve` 网页同一
+白名单的状态切换（待办/进行中/等人工/完成，不含放弃）：点击任务状态胶囊弹出菜单，
+「已完成」需在弹层内确认验收条件。依赖判断、事件记录与完成时 HEAD 登记全部由 CLI 执行；
+其余写入（新建、放弃、依赖、记录）仍走 CLI。需求拖动顺序与置顶状态通过数据库旁的
+`*.view.json` sidecar 与 Swift 版共享。
 
 ## 开发
 
@@ -80,4 +84,5 @@ npm run tauri build -- --no-bundle   # 只验证编译时可跳过打包
 
 当前 POC 已按成熟看板视觉迁移全局统计、搜索、状态/负责人筛选、全部/单需求切换、需求置顶/
 拖动排序、需求任务大纲、任务 spine、任务详情折叠与结论/风险分类折叠，并覆盖 375px、
-1440px、1600px 三档布局。任务状态写入和 sidecar 正式打包不在本阶段范围内。
+1440px、1600px 三档布局。任务状态切换通过 CLI 白名单命令完成；新建/放弃/记录等写入
+仍在 CLI。

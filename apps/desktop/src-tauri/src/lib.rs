@@ -174,11 +174,9 @@ fn command_attempts() -> Vec<CommandAttempt> {
     attempts
 }
 
-fn execute(attempt: &CommandAttempt, database: Option<&str>) -> Result<Value, String> {
+fn run_board(attempt: &CommandAttempt, args: &[String]) -> Result<Vec<u8>, String> {
     let mut command = Command::new(&attempt.program);
-    command
-        .args(&attempt.prefix_args)
-        .args(export_args(database));
+    command.args(&attempt.prefix_args).args(args);
     if let Some(directory) = &attempt.current_dir {
         command.current_dir(directory);
     }
@@ -197,7 +195,12 @@ fn execute(attempt: &CommandAttempt, database: Option<&str>) -> Result<Value, St
         return Err(format!("{}：{}", attempt.source, detail));
     }
 
-    serde_json::from_slice(&output.stdout)
+    Ok(output.stdout)
+}
+
+fn execute(attempt: &CommandAttempt, database: Option<&str>) -> Result<Value, String> {
+    let stdout = run_board(attempt, &export_args(database))?;
+    serde_json::from_slice(&stdout)
         .map_err(|error| format!("{} 返回了无效 JSON：{}", attempt.source, error))
 }
 
@@ -228,6 +231,58 @@ fn load_board(state: tauri::State<'_, BridgeState>) -> Result<LoadBoardResponse,
     Err(format!("无法读取任务看板。已尝试：\n{}", errors.join("\n")))
 }
 
+/// 与 board serve 网页同一状态白名单;放弃等其余写入仍走 CLI,依赖判断与 HEAD 记录由 CLI 负责。
+const STATUS_SUBCOMMANDS: [(&str, &str); 4] = [
+    ("todo", "todo"),
+    ("active", "start"),
+    ("waiting", "wait"),
+    ("done", "done"),
+];
+
+fn status_args(
+    database: Option<&str>,
+    subcommand: &str,
+    reference: u32,
+    project: &str,
+) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(database) = database.filter(|value| !value.trim().is_empty()) {
+        args.push("--db".into());
+        args.push(database.into());
+    }
+    args.extend([
+        subcommand.into(),
+        reference.to_string(),
+        "-p".into(),
+        project.into(),
+    ]);
+    args
+}
+
+#[tauri::command]
+fn set_task_status(project: String, reference: u32, status: String) -> Result<(), String> {
+    let subcommand = STATUS_SUBCOMMANDS
+        .iter()
+        .find(|(name, _)| *name == status)
+        .map(|(_, subcommand)| *subcommand)
+        .ok_or_else(|| "桌面端只允许 todo/active/waiting/done".to_string())?;
+    let project = project.trim();
+    if project.is_empty() || project.len() > 120 || project.starts_with('-') {
+        return Err("需求 key 无效".into());
+    }
+
+    let database = env::var("TASKBOARD_DB").ok();
+    let args = status_args(database.as_deref(), subcommand, reference, project);
+    let mut errors = Vec::new();
+    for attempt in command_attempts() {
+        match run_board(&attempt, &args) {
+            Ok(_) => return Ok(()),
+            Err(error) => errors.push(error),
+        }
+    }
+    Err(format!("无法更新任务状态。已尝试：\n{}", errors.join("\n")))
+}
+
 #[tauri::command]
 fn save_view_prefs(
     state: tauri::State<'_, BridgeState>,
@@ -246,7 +301,11 @@ fn save_view_prefs(
 pub fn run() {
     tauri::Builder::default()
         .manage(BridgeState::default())
-        .invoke_handler(tauri::generate_handler![load_board, save_view_prefs])
+        .invoke_handler(tauri::generate_handler![
+            load_board,
+            save_view_prefs,
+            set_task_status
+        ])
         .run(tauri::generate_context!())
         .expect("error while running Taskboard desktop");
 }
@@ -315,6 +374,18 @@ mod tests {
         for suffix in ["", "-wal", "-shm"] {
             let _ = std::fs::remove_file(format!("{}{}", database_text, suffix));
         }
+    }
+
+    #[test]
+    fn status_command_maps_web_whitelist_to_cli() {
+        let args = status_args(Some("/tmp/db"), "start", 27, "reg-calibration");
+        assert_eq!(args, vec!["--db", "/tmp/db", "start", "27", "-p", "reg-calibration"]);
+        assert!(STATUS_SUBCOMMANDS
+            .iter()
+            .all(|(_, subcommand)| matches!(*subcommand, "todo" | "start" | "wait" | "done")));
+        assert!(!STATUS_SUBCOMMANDS
+            .iter()
+            .any(|(name, _)| matches!(*name, "dropped" | "rm" | "drop")));
     }
 
     #[test]

@@ -3,7 +3,7 @@ import { computed, reactive } from "vue";
 import TaskRow from "./TaskRow.vue";
 import type { BoardTask } from "../types";
 
-const props = defineProps<{ tasks: BoardTask[]; query: string }>();
+const props = defineProps<{ tasks: BoardTask[]; projectKey: string; query: string }>();
 
 const expandedGroups = reactive<Record<string, boolean>>({
   blocked: false,
@@ -51,6 +51,7 @@ function groupOpen(key: string): boolean {
       v-for="task in focusTasks"
       :key="`${task.ref}:${task.title}`"
       :task="task"
+      :project-key="projectKey"
       :query="query"
     />
 
@@ -74,6 +75,7 @@ function groupOpen(key: string): boolean {
           v-for="task in group.tasks"
           :key="`${task.ref}:${task.title}`"
           :task="task"
+          :project-key="projectKey"
           :query="query"
         />
       </div>

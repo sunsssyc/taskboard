@@ -1,6 +1,17 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { demoSnapshot } from "../demo";
+import { loadBoardSnapshot, saveTaskStatus } from "../board";
+
+vi.mock("../board", () => ({
+  loadBoardSnapshot: vi.fn(async () => ({
+    snapshot: { generated_at: "", db: "", projects: [] },
+    source: "测试桥接",
+    viewPrefs: { order: [], pinned: [] },
+  })),
+  saveBoardViewPrefs: vi.fn(async (prefs: unknown) => prefs),
+  saveTaskStatus: vi.fn(async () => {}),
+}));
 import {
   moveProjectOrder,
   noteMatches,
@@ -9,6 +20,31 @@ import {
   taskMatches,
   useBoardStore,
 } from "./board";
+
+describe("task status switch", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
+
+  it("delegates to the CLI bridge and reloads the snapshot", async () => {
+    const board = useBoardStore();
+    await board.setTaskStatus("taskboard", 26, "done");
+    expect(saveTaskStatus).toHaveBeenCalledWith("taskboard", 26, "done");
+    expect(loadBoardSnapshot).toHaveBeenCalledTimes(1);
+    expect(board.actionError).toBe("");
+  });
+
+  it("surfaces bridge failures without dropping current data", async () => {
+    vi.mocked(saveTaskStatus).mockRejectedValueOnce(new Error("CLI 不可用"));
+    const board = useBoardStore();
+    board.snapshot = demoSnapshot;
+    await board.setTaskStatus("taskboard", 26, "active");
+    expect(board.actionError).toContain("CLI 不可用");
+    expect(board.snapshot).toStrictEqual(demoSnapshot);
+    expect(loadBoardSnapshot).not.toHaveBeenCalled();
+  });
+});
 
 describe("board search", () => {
   beforeEach(() => setActivePinia(createPinia()));

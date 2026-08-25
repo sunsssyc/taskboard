@@ -39,7 +39,7 @@ defineEmits<{ showAll: [] }>();
       <p>{{ project.summary || "持续保存目标、进度、结论和下一步。" }}</p>
     </header>
 
-    <TaskGroups :tasks="tasks" :query="query" />
+    <TaskGroups :tasks="tasks" :project-key="project.key" :query="query" />
 
     <NoteGroups
       :findings="findings"

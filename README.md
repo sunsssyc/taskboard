@@ -237,7 +237,9 @@ macOS 13+ 的 `SMAppService`;首次启用后若系统要求批准,到“系统�
 `apps/desktop` 验证用 Tauri v2 + Vue 3 + TypeScript + Pinia 替换桌面展示层。POC 通过受限
 Rust command 调用 `board export --json`，保留现有 Python CLI、SQLite 数据模型和 Swift
 实现；当前已迁移成熟看板的全局统计、搜索、状态/负责人筛选、需求导航、任务路径与结论区，
-需求置顶和拖动排序与 Swift 版共享 `*.view.json`；仍不提供任务状态写入。
+需求置顶和拖动排序与 Swift 版共享 `*.view.json`；点击状态胶囊可切换 待办/进行中/
+等人工/完成（与 `board serve` 网页同一白名单，映射到 CLI 子命令执行，完成需确认验收
+条件），其余写入仍走 CLI。
 
 ```bash
 cd apps/desktop

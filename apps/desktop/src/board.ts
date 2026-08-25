@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { demoSnapshot } from "./demo";
-import type { BoardLoadResponse, ViewPrefs } from "./types";
+import type { BoardLoadResponse, TaskStatus, ViewPrefs } from "./types";
 
 const ORDER_KEY = "taskboard:order";
 const PINNED_KEY = "taskboard:pinned";
@@ -30,6 +30,17 @@ export async function loadBoardSnapshot(): Promise<BoardLoadResponse> {
     };
   }
   return invoke<BoardLoadResponse>("load_board");
+}
+
+export async function saveTaskStatus(
+  project: string,
+  reference: number,
+  status: TaskStatus,
+): Promise<void> {
+  if (!window.__TAURI_INTERNALS__) {
+    throw new Error("浏览器演示数据不支持修改状态;运行 npm run tauri dev 后操作真实看板。");
+  }
+  await invoke("set_task_status", { project, reference, status });
 }
 
 export async function saveBoardViewPrefs(prefs: ViewPrefs): Promise<ViewPrefs> {
