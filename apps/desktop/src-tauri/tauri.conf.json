@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Taskboard",
+  "productName": "Taskboard Desktop",
   "version": "0.1.0",
   "identifier": "com.sunsssyc.taskboard",
   "build": {
@@ -27,7 +27,13 @@
     }
   },
   "bundle": {
-    "active": false,
-    "icon": []
+    "active": true,
+    "targets": ["app"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns"
+    ]
   }
 }

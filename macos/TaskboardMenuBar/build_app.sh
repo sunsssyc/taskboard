@@ -27,6 +27,10 @@ install -m 644 "${script_dir}/Resources/Info.plist" "${app_dir}/Contents/Info.pl
 install -m 644 "${icon_path}" "${app_dir}/Contents/Resources/AppIcon.icns"
 plutil -replace TaskboardBoardExecutable -string "${board_executable}" \
   "${app_dir}/Contents/Info.plist"
+if [[ -n "${TASKBOARD_DESKTOP_APP:-}" ]]; then
+  plutil -replace TaskboardDesktopApp -string "${TASKBOARD_DESKTOP_APP}" \
+    "${app_dir}/Contents/Info.plist"
+fi
 codesign --force --deep --sign - "${app_dir}"
 
 print "${app_dir}"

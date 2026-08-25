@@ -53,13 +53,29 @@ npm run tauri dev
 若已经安装稳定的 `board` 可执行文件，也可设置 `TASKBOARD_BOARD_EXECUTABLE`。开发构建优先
 从仓库根目录运行 Python 模块，避免可编辑安装因仓库改名而失效。
 
+## 打包与菜单栏壳联动
+
+```bash
+npm run tauri build
+```
+
+产出 `src-tauri/target/release/bundle/macos/Taskboard Desktop.app`（bundle id
+`com.sunsssyc.taskboard`）。命名刻意与 Swift 菜单栏壳的 `Taskboard.app` 区分，
+两者可同时安装到 `/Applications`。
+
+Swift 壳的「打开任务看板」按以下顺序唤起本应用：运行中则激活，已安装则启动，
+都找不到时回退壳内原生窗口。壳按 `TASKBOARD_DESKTOP_APP` 环境变量、壳 Info.plist 的
+`TaskboardDesktopApp` 键、`/Applications` 与 `~/Applications` 的顺序定位 .app，并校验
+bundle id 防止唤起壳自身。打包后的 .app 从 Finder 启动时没有终端 PATH，Rust 侧会按
+`/opt/anaconda3`、`/opt/homebrew`、`/usr/local`、`~/.local` 的既有约定探测 `board`。
+
 ## 验证
 
 ```bash
 npm run test
 npm run build
 cargo test --manifest-path src-tauri/Cargo.toml
-npm run tauri build -- --no-bundle
+npm run tauri build -- --no-bundle   # 只验证编译时可跳过打包
 ```
 
 当前 POC 已按成熟看板视觉迁移全局统计、搜索、状态/负责人筛选、全部/单需求切换、需求置顶/

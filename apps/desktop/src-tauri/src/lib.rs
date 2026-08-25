@@ -147,6 +147,24 @@ fn command_attempts() -> Vec<CommandAttempt> {
         });
     }
 
+    // Finder 启动的 .app 只有精简 PATH,按 Swift 壳 BoardConfiguration 的候选路径探测。
+    let home = env::var("HOME").unwrap_or_default();
+    for candidate in [
+        "/opt/anaconda3/bin/board".into(),
+        "/opt/homebrew/bin/board".into(),
+        "/usr/local/bin/board".into(),
+        format!("{home}/.local/bin/board"),
+    ] {
+        if Path::new(&candidate).is_file() {
+            attempts.push(CommandAttempt {
+                program: candidate.clone(),
+                prefix_args: Vec::new(),
+                current_dir: None,
+                source: candidate,
+            });
+        }
+    }
+
     attempts.push(CommandAttempt {
         program: "board".into(),
         prefix_args: Vec::new(),

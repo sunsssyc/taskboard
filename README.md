@@ -221,6 +221,10 @@ open ~/Applications/Taskboard.app
 macOS 13+ 的 `SMAppService`;首次启用后若系统要求批准,到“系统设置 → 通用 → 登录项”
 确认即可。
 
+「打开任务看板」优先唤起 Tauri 桌面版 `Taskboard Desktop.app`（运行中则激活,已安装则
+启动),找不到时回退壳内原生窗口;桌面版可用时壳启动只驻留菜单栏,不再自动弹窗。定位
+顺序与打包方式见 `apps/desktop/README.md`。
+
 构建脚本会把当前 `board` 的绝对路径写进 App。换了 Python 环境后重新构建,或启动 App
 前设置 `TASKBOARD_BOARD_EXECUTABLE`。数据库默认仍为 `~/.taskboard/board.db`;
 也支持 `TASKBOARD_HOME` 或 App 专用的 `TASKBOARD_DB` 绝对路径。
