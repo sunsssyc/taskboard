@@ -5,6 +5,7 @@ import ProjectSidebar from "./components/ProjectSidebar.vue";
 import ProjectWorkspace from "./components/ProjectWorkspace.vue";
 import { useBoardStore } from "./stores/board";
 import type { TaskCounts, TaskStatus } from "./types";
+import { createAutoRefresh } from "./refresh";
 import {
   applyZoom,
   readStoredZoom,
@@ -113,13 +114,25 @@ function onZoomShortcut(event: KeyboardEvent) {
   void setZoom(zoomForAction(zoomScale.value, action));
 }
 
+const autoRefresh = createAutoRefresh(() => void board.load(), {
+  isBusy: () => loading.value,
+});
+
+function onVisibilityChange() {
+  autoRefresh.onVisible();
+}
+
 onMounted(() => {
   void board.load();
   void setZoom(zoomScale.value, false);
   window.addEventListener("keydown", onZoomShortcut);
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  autoRefresh.start();
 });
 
 onBeforeUnmount(() => {
+  autoRefresh.stop();
+  document.removeEventListener("visibilitychange", onVisibilityChange);
   window.removeEventListener("keydown", onZoomShortcut);
   window.clearTimeout(zoomNoticeTimer);
 });

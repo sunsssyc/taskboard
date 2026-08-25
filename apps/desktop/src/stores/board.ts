@@ -174,6 +174,7 @@ export const useBoardStore = defineStore("board", () => {
 
   let preferenceRevision = 0;
   let preferenceQueue = Promise.resolve();
+  let pendingPreferenceSaves = 0;
 
   function persistViewPrefs() {
     const revision = ++preferenceRevision;
@@ -182,6 +183,7 @@ export const useBoardStore = defineStore("board", () => {
       pinned: [...viewPrefs.value.pinned],
     };
     preferenceError.value = "";
+    pendingPreferenceSaves += 1;
     preferenceQueue = preferenceQueue
       .then(async () => {
         const saved = await saveBoardViewPrefs(pending);
@@ -191,6 +193,9 @@ export const useBoardStore = defineStore("board", () => {
         if (revision === preferenceRevision) {
           preferenceError.value = reason instanceof Error ? reason.message : String(reason);
         }
+      })
+      .finally(() => {
+        pendingPreferenceSaves -= 1;
       });
   }
 
@@ -226,7 +231,8 @@ export const useBoardStore = defineStore("board", () => {
       const response = await loadBoardSnapshot();
       snapshot.value = response.snapshot;
       source.value = response.source;
-      viewPrefs.value = response.viewPrefs;
+      // 保存在途时磁盘上的偏好可能落后于界面,不回灌以免刷新打回刚拖好的顺序。
+      if (pendingPreferenceSaves === 0) viewPrefs.value = response.viewPrefs;
       if (
         selectedProjectKey.value &&
         !response.snapshot.projects.some((project) => project.key === selectedProjectKey.value)

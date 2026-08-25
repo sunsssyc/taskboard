@@ -39,6 +39,9 @@ TASKBOARD_PYTHON=/path/to/python \
 npm run tauri dev
 ```
 
+看板每 60 秒自动刷新一次：窗口隐藏时暂停计时，重新可见后立即补一次；手动刷新或
+加载进行中时跳过当轮。刷新失败沿用现有行为，保留上一次数据并提示错误。
+
 桌面缩放快捷键：
 
 - `Command/Ctrl + =` 或 `Command/Ctrl + +`：放大 10%；
