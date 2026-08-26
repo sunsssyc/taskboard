@@ -227,7 +227,9 @@ code {
   min-width: 0;
   min-height: 0;
   grid-template-columns: 248px minmax(0, 1fr);
+  transition: grid-template-columns 180ms ease;
 }
+.dashboard.sidebar-collapsed { grid-template-columns: 42px minmax(0, 1fr); }
 
 .navigator {
   display: flex;
@@ -238,11 +240,13 @@ code {
   background: var(--chrome);
   overflow: hidden;
 }
+.navigator.collapsed .project-list,
+.navigator.collapsed .navigator-footer { display: none; }
 
 .navigator-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 7px;
   padding: 14px 19px 8px;
   color: var(--ink-faint);
   font-size: 11px;
@@ -251,7 +255,35 @@ code {
   text-transform: uppercase;
 }
 
-.navigator-head b { font-family: var(--mono); font-weight: 500; }
+.navigator-head b { margin-left: auto; font-family: var(--mono); font-weight: 500; }
+.navigator-toggle {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--ink-faint);
+  background: transparent;
+  cursor: pointer;
+}
+.navigator-toggle:hover { color: var(--ink-muted); border-color: var(--rule); background: var(--surface); }
+.navigator-toggle svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.35;
+}
+.navigator-toggle .toggle-arrow { transform-origin: center; transition: transform 160ms ease; }
+.navigator-toggle.collapsed .toggle-arrow { transform: scaleX(-1); }
+.navigator.collapsed .navigator-head { justify-content: center; padding: 10px 6px; }
+.navigator.collapsed .navigator-title,
+.navigator.collapsed .navigator-count { display: none; }
 
 .project-list {
   display: flex;
@@ -1010,6 +1042,7 @@ body.project-drag-active {
 @media (max-width: 1080px) {
   .global-meta span:nth-child(n + 6) { display: none; }
   .dashboard { grid-template-columns: 220px minmax(0, 1fr); }
+  .dashboard.sidebar-collapsed { grid-template-columns: 42px minmax(0, 1fr); }
   .task-repositories { display: none; }
   .content { padding-right: 22px; padding-left: 22px; }
 }

@@ -13,9 +13,20 @@ import {
   zoomForAction,
 } from "./zoom";
 
+const SIDEBAR_COLLAPSED_KEY = "taskboard:sidebar-collapsed";
+
+function readSidebarCollapsed(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 const board = useBoardStore();
 const zoomScale = ref(readStoredZoom());
 const zoomNotice = ref("");
+const sidebarCollapsed = ref(readSidebarCollapsed());
 let zoomNoticeTimer: number | undefined;
 const {
   snapshot,
@@ -91,6 +102,15 @@ function focusTask(ref: number) {
     requestAnimationFrame(() => target.classList.add("flash"));
     window.setTimeout(() => target.classList.remove("flash"), 1250);
   });
+}
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value;
+  try {
+    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, sidebarCollapsed.value ? "1" : "0");
+  } catch {
+    // 存储不可用时仍保留当前会话状态。
+  }
 }
 
 function showZoomNotice(message: string) {
@@ -197,16 +217,18 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <div class="dashboard">
+    <div class="dashboard" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
       <ProjectSidebar
         :projects="orderedProjects"
         :selected-key="selectedProjectKey"
+        :collapsed="sidebarCollapsed"
         :pinned-keys="viewPrefs.pinned"
         :source="source"
         :database="snapshot?.db ?? null"
         :preference-error="preferenceError"
         @select="board.selectProject"
         @select-all="board.selectAllProjects"
+        @toggle-collapse="toggleSidebar"
         @focus-task="focusTask"
         @toggle-pin="board.togglePinned"
         @reorder="board.reorderProject"

@@ -5,6 +5,7 @@ import type { BoardProject, BoardTask } from "../types";
 const props = defineProps<{
   projects: BoardProject[];
   selectedKey: string;
+  collapsed: boolean;
   pinnedKeys: string[];
   source: string;
   database: string | null;
@@ -148,6 +149,7 @@ function onProjectClick(key: string) {
 const emit = defineEmits<{
   select: [key: string];
   selectAll: [];
+  toggleCollapse: [];
   focusTask: [ref: number];
   togglePin: [key: string];
   reorder: [draggedKey: string, targetKey: string, before: boolean];
@@ -162,13 +164,29 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <aside class="navigator">
+  <aside class="navigator" :class="{ collapsed }">
     <div class="navigator-head">
-      <span>需求</span>
-      <b>{{ projects.length }}</b>
+      <span class="navigator-title">需求</span>
+      <b class="navigator-count">{{ projects.length }}</b>
+      <button
+        type="button"
+        class="navigator-toggle"
+        :class="{ collapsed }"
+        :title="collapsed ? '展开需求栏' : '收起需求栏'"
+        :aria-label="collapsed ? '展开需求栏' : '收起需求栏'"
+        :aria-expanded="!collapsed"
+        aria-controls="project-navigation-list"
+        @click="$emit('toggleCollapse')"
+      >
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <rect x="2.5" y="3" width="15" height="14" rx="2"></rect>
+          <path d="M7 3v14"></path>
+          <path class="toggle-arrow" d="m13 7-3 3 3 3"></path>
+        </svg>
+      </button>
     </div>
 
-    <nav class="project-list" aria-label="需求工作流">
+    <nav id="project-navigation-list" class="project-list" aria-label="需求工作流">
       <button
         type="button"
         class="all-projects-button"
