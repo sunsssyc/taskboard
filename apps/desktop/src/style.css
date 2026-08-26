@@ -852,9 +852,25 @@ body.project-drag-active {
   border-bottom: 1px solid var(--rule);
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(60 60 67 / 34%) rgb(0 0 0 / 4%);
 }
-.sheet-tabs::-webkit-scrollbar { display: none; }
+.sheet-tabs::-webkit-scrollbar { height: 9px; }
+.sheet-tabs::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgb(0 0 0 / 4%);
+}
+.sheet-tabs::-webkit-scrollbar-thumb {
+  min-width: 42px;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: rgb(60 60 67 / 34%);
+  background-clip: content-box;
+}
+.sheet-tabs::-webkit-scrollbar-thumb:hover {
+  background: rgb(60 60 67 / 52%);
+  background-clip: content-box;
+}
 .sheet-tab {
   position: relative;
   display: flex;
