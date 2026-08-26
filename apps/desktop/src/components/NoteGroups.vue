@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, reactive } from "vue";
+import { computed, nextTick, reactive, ref, watch } from "vue";
 import MarkdownBlock from "./MarkdownBlock.vue";
+import { buildNoteSheets } from "../noteSheets";
 import type { BoardNote } from "../types";
 
 const props = defineProps<{
@@ -11,48 +12,24 @@ const props = defineProps<{
 }>();
 
 const openNotes = reactive(new Set<number>());
-const collapsedSections = reactive<Record<string, boolean>>({
-  finding: false,
-  risk: false,
-  link: false,
-});
-
-const sections = computed(() => [
-  {
-    key: "finding",
-    title: "已定结论",
-    hint: "后续决策以这些事实为准",
-    notes: props.findings,
-  },
-  {
-    key: "risk",
-    title: "风险与尾巴",
-    hint: "暂不阻塞主线，但不能遗忘",
-    notes: props.risks,
-  },
-  {
-    key: "link",
-    title: "关键入口",
-    hint: "交付文件与外部坐标",
-    notes: props.links,
-  },
-]);
-
-const findingCategories = computed(() =>
-  categoryGroups(props.findings).map((group) => ({
-    name: group.category,
-    count: group.items.length,
-  })),
+const activeSheetId = ref("");
+const sheets = computed(() => buildNoteSheets(props.findings, props.risks, props.links));
+const activeSheet = computed(
+  () => sheets.value.find((sheet) => sheet.id === activeSheetId.value) ?? sheets.value[0],
+);
+const activeSheetIndex = computed(() =>
+  Math.max(0, sheets.value.findIndex((sheet) => sheet.id === activeSheet.value?.id)),
 );
 
-function categoryGroups(notes: BoardNote[]) {
-  const groups = new Map<string, BoardNote[]>();
-  for (const note of notes) {
-    const category = note.category || "未分类";
-    groups.set(category, [...(groups.get(category) ?? []), note]);
-  }
-  return [...groups.entries()].map(([category, items]) => ({ category, items }));
-}
+watch(
+  sheets,
+  (nextSheets) => {
+    if (!nextSheets.some((sheet) => sheet.id === activeSheetId.value)) {
+      activeSheetId.value = nextSheets[0]?.id ?? "";
+    }
+  },
+  { immediate: true },
+);
 
 function isOpen(note: BoardNote): boolean {
   return Boolean(props.query.trim()) || openNotes.has(note.id);
@@ -62,74 +39,92 @@ function toggleNote(id: number) {
   if (openNotes.has(id)) openNotes.delete(id);
   else openNotes.add(id);
 }
+
+async function selectAdjacentSheet(event: KeyboardEvent, index: number) {
+  const buttons = (event.currentTarget as HTMLElement)
+    .closest<HTMLElement>(".sheet-tabs")
+    ?.querySelectorAll<HTMLButtonElement>(".sheet-tab");
+  const target = buttons?.[index];
+  if (!target) return;
+  activeSheetId.value = sheets.value[index].id;
+  await nextTick();
+  target.focus();
+}
+
+function moveSheet(event: KeyboardEvent, currentIndex: number, delta: number) {
+  const length = sheets.value.length;
+  if (!length) return;
+  const nextIndex = (currentIndex + delta + length) % length;
+  void selectAdjacentSheet(event, nextIndex);
+}
 </script>
 
 <template>
-  <section v-if="findings.length || risks.length || links.length" class="notes-panel">
+  <section v-if="sheets.length" class="notes-panel">
     <header class="panel-heading">
       <div>
-        <span class="eyebrow">已判定，不再推演</span>
         <h2>约束性结论</h2>
+        <span class="eyebrow">按主题切换，后续决策以当前事实为准</span>
       </div>
       <span class="panel-count">{{ findings.length + risks.length + links.length }} 条</span>
     </header>
 
-    <div v-if="findingCategories.length" class="category-tabs" aria-label="结论分类">
-      <span v-for="category in findingCategories" :key="category.name">
-        {{ category.name }} <b>{{ category.count }}</b>
-      </span>
+    <div class="sheet-tabs" role="tablist" aria-label="结论主题">
+      <button
+        v-for="(sheet, index) in sheets"
+        :id="`note-sheet-tab-${index}`"
+        :key="sheet.id"
+        type="button"
+        class="sheet-tab"
+        :class="[`sheet-${sheet.kind}`, { active: sheet.id === activeSheet?.id }]"
+        role="tab"
+        :aria-selected="sheet.id === activeSheet?.id"
+        :aria-controls="`note-sheet-panel-${index}`"
+        :tabindex="sheet.id === activeSheet?.id ? 0 : -1"
+        @click="activeSheetId = sheet.id"
+        @keydown.left.prevent="moveSheet($event, index, -1)"
+        @keydown.right.prevent="moveSheet($event, index, 1)"
+        @keydown.home.prevent="selectAdjacentSheet($event, 0)"
+        @keydown.end.prevent="selectAdjacentSheet($event, sheets.length - 1)"
+      >
+        <span>{{ sheet.label }}</span>
+        <b>{{ sheet.notes.length }}</b>
+      </button>
     </div>
 
-    <div class="note-sections">
-      <section
-        v-for="section in sections"
-        v-show="section.notes.length"
-        :key="section.key"
-        class="note-section"
-        :class="`note-${section.key}`"
+    <div
+      v-if="activeSheet"
+      :id="`note-sheet-panel-${activeSheetIndex}`"
+      class="sheet-panel"
+      :class="`sheet-panel-${activeSheet.kind}`"
+      role="tabpanel"
+      :aria-labelledby="`note-sheet-tab-${activeSheetIndex}`"
+      tabindex="0"
+    >
+      <article
+        v-for="note in activeSheet.notes"
+        :key="note.id"
+        class="note-row"
+        :class="{ open: isOpen(note), superseded: note.is_superseded }"
       >
         <button
           type="button"
-          class="note-section-heading"
-          :aria-expanded="!collapsedSections[section.key]"
-          @click="collapsedSections[section.key] = !collapsedSections[section.key]"
+          class="note-row-head"
+          :aria-expanded="isOpen(note)"
+          @click="toggleNote(note.id)"
         >
-          <span class="disclosure" :class="{ open: !collapsedSections[section.key] }" aria-hidden="true"></span>
-          <strong>{{ section.title }}</strong>
-          <span class="group-count">{{ section.notes.length }}</span>
-          <span class="group-hint">{{ section.hint }}</span>
+          <span class="disclosure" :class="{ open: isOpen(note) }" aria-hidden="true"></span>
+          <span class="note-id">[{{ note.id }}]</span>
+          <strong>{{ note.title }}</strong>
+          <span v-if="note.metric" class="note-metric">{{ note.metric }}</span>
         </button>
-
-        <div v-if="!collapsedSections[section.key]" class="category-list">
-          <div v-for="group in categoryGroups(section.notes)" :key="group.category" class="category-group">
-            <h3>{{ group.category }} <span>{{ group.items.length }}</span></h3>
-            <article
-              v-for="note in group.items"
-              :key="note.id"
-              class="note-row"
-              :class="{ open: isOpen(note), superseded: note.is_superseded }"
-            >
-              <button
-                type="button"
-                class="note-row-head"
-                :aria-expanded="isOpen(note)"
-                @click="toggleNote(note.id)"
-              >
-                <span class="disclosure" :class="{ open: isOpen(note) }" aria-hidden="true"></span>
-                <span class="note-id">[{{ note.id }}]</span>
-                <strong>{{ note.title }}</strong>
-                <span v-if="note.metric" class="note-metric">{{ note.metric }}</span>
-              </button>
-              <div v-if="isOpen(note)" class="note-body">
-                <MarkdownBlock v-if="note.body" :text="note.body" />
-                <div v-if="note.supersedes.length" class="supersedes">
-                  推翻了 {{ note.supersedes.map((id) => `[${id}]`).join("、") }}
-                </div>
-              </div>
-            </article>
+        <div v-if="isOpen(note)" class="note-body">
+          <MarkdownBlock v-if="note.body" :text="note.body" />
+          <div v-if="note.supersedes.length" class="supersedes">
+            推翻了 {{ note.supersedes.map((id) => `[${id}]`).join("、") }}
           </div>
         </div>
-      </section>
+      </article>
     </div>
   </section>
 </template>
