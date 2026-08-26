@@ -835,7 +835,7 @@ body.project-drag-active {
 .archive-heading > span:last-child { font-size: 12.5px; }
 .archive-tasks { border-top: 1px solid var(--rule-soft); }
 
-.notes-panel { display: flex; min-width: 0; flex-direction: column; gap: 10px; margin-top: 22px; }
+.notes-panel { display: flex; min-width: 0; flex-direction: column; gap: 0; margin-top: 22px; }
 .panel-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .panel-heading > div { display: flex; align-items: baseline; gap: 9px; }
 .panel-heading .eyebrow { order: 2; }
@@ -891,6 +891,19 @@ body.project-drag-active {
   font-variant-numeric: tabular-nums;
 }
 .sheet-tab.active b { color: var(--ink-muted); }
+.sheet-workbook {
+  overflow: hidden;
+  border: 1px solid var(--rule);
+  border-top: 0;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--surface);
+}
+.sheet-workbook .panel-heading {
+  min-height: 50px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--rule-soft);
+  background: rgb(250 250 251 / 72%);
+}
 .sheet-panel {
   min-height: 52px;
   overflow: hidden;
@@ -899,6 +912,7 @@ body.project-drag-active {
   border-radius: 0 0 var(--radius-md) var(--radius-md);
   background: var(--surface);
 }
+.sheet-workbook .sheet-panel { border: 0; border-radius: 0; }
 .sheet-panel .note-row { border-right: 0; border-left: 0; }
 .sheet-panel .note-row:first-child { border-top: 0; border-radius: 0; }
 .sheet-panel .note-row:last-child { border-bottom: 0; border-radius: 0; }

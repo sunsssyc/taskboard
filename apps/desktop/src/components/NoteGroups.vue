@@ -61,14 +61,6 @@ function moveSheet(event: KeyboardEvent, currentIndex: number, delta: number) {
 
 <template>
   <section v-if="sheets.length" class="notes-panel">
-    <header class="panel-heading">
-      <div>
-        <h2>约束性结论</h2>
-        <span class="eyebrow">按主题切换，后续决策以当前事实为准</span>
-      </div>
-      <span class="panel-count">{{ findings.length + risks.length + links.length }} 条</span>
-    </header>
-
     <div class="sheet-tabs" role="tablist" aria-label="结论主题">
       <button
         v-for="(sheet, index) in sheets"
@@ -92,39 +84,49 @@ function moveSheet(event: KeyboardEvent, currentIndex: number, delta: number) {
       </button>
     </div>
 
-    <div
-      v-if="activeSheet"
-      :id="`note-sheet-panel-${activeSheetIndex}`"
-      class="sheet-panel"
-      :class="`sheet-panel-${activeSheet.kind}`"
-      role="tabpanel"
-      :aria-labelledby="`note-sheet-tab-${activeSheetIndex}`"
-      tabindex="0"
-    >
-      <article
-        v-for="note in activeSheet.notes"
-        :key="note.id"
-        class="note-row"
-        :class="{ open: isOpen(note), superseded: note.is_superseded }"
-      >
-        <button
-          type="button"
-          class="note-row-head"
-          :aria-expanded="isOpen(note)"
-          @click="toggleNote(note.id)"
-        >
-          <span class="disclosure" :class="{ open: isOpen(note) }" aria-hidden="true"></span>
-          <span class="note-id">[{{ note.id }}]</span>
-          <strong>{{ note.title }}</strong>
-          <span v-if="note.metric" class="note-metric">{{ note.metric }}</span>
-        </button>
-        <div v-if="isOpen(note)" class="note-body">
-          <MarkdownBlock v-if="note.body" :text="note.body" />
-          <div v-if="note.supersedes.length" class="supersedes">
-            推翻了 {{ note.supersedes.map((id) => `[${id}]`).join("、") }}
-          </div>
+    <div class="sheet-workbook">
+      <header class="panel-heading">
+        <div>
+          <h2>约束性结论</h2>
+          <span class="eyebrow">按主题切换，后续决策以当前事实为准</span>
         </div>
-      </article>
+        <span class="panel-count">{{ findings.length + risks.length + links.length }} 条</span>
+      </header>
+
+      <div
+        v-if="activeSheet"
+        :id="`note-sheet-panel-${activeSheetIndex}`"
+        class="sheet-panel"
+        :class="`sheet-panel-${activeSheet.kind}`"
+        role="tabpanel"
+        :aria-labelledby="`note-sheet-tab-${activeSheetIndex}`"
+        tabindex="0"
+      >
+        <article
+          v-for="note in activeSheet.notes"
+          :key="note.id"
+          class="note-row"
+          :class="{ open: isOpen(note), superseded: note.is_superseded }"
+        >
+          <button
+            type="button"
+            class="note-row-head"
+            :aria-expanded="isOpen(note)"
+            @click="toggleNote(note.id)"
+          >
+            <span class="disclosure" :class="{ open: isOpen(note) }" aria-hidden="true"></span>
+            <span class="note-id">[{{ note.id }}]</span>
+            <strong>{{ note.title }}</strong>
+            <span v-if="note.metric" class="note-metric">{{ note.metric }}</span>
+          </button>
+          <div v-if="isOpen(note)" class="note-body">
+            <MarkdownBlock v-if="note.body" :text="note.body" />
+            <div v-if="note.supersedes.length" class="supersedes">
+              推翻了 {{ note.supersedes.map((id) => `[${id}]`).join("、") }}
+            </div>
+          </div>
+        </article>
+      </div>
     </div>
   </section>
 </template>
