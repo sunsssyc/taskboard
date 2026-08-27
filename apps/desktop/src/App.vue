@@ -42,7 +42,8 @@ const {
   actionNotice,
   projects,
   archivedProjects,
-  orderedProjects,
+  pinnedProjects,
+  regularProjects,
   displayProjects,
   owners,
   viewPrefs,
@@ -222,7 +223,8 @@ onBeforeUnmount(() => {
 
     <div class="dashboard" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
       <ProjectSidebar
-        :projects="orderedProjects"
+        :projects="regularProjects"
+        :pinned-projects="pinnedProjects"
         :archived-projects="archivedProjects"
         :selected-key="selectedProjectKey"
         :collapsed="sidebarCollapsed"

@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { IconChevronLeft, IconChevronRight } from "@tabler/icons-vue";
 import {
   computed,
   nextTick,
@@ -13,8 +12,6 @@ import MarkdownBlock from "./MarkdownBlock.vue";
 import { buildNoteSheets } from "../noteSheets";
 import type { BoardNote } from "../types";
 
-const SHEET_EDGE_CONTROL_WIDTH = 26;
-
 const props = defineProps<{
   projectKey: string;
   findings: BoardNote[];
@@ -26,8 +23,6 @@ const props = defineProps<{
 const openNotes = reactive(new Set<number>());
 const activeSheetId = ref("");
 const sheetTabs = ref<HTMLElement | null>(null);
-const canScrollLeft = ref(false);
-const canScrollRight = ref(false);
 let resizeObserver: ResizeObserver | null = null;
 let layoutFrame = 0;
 const sheets = computed(() => buildNoteSheets(props.findings, props.risks, props.links));
@@ -48,31 +43,22 @@ watch(
   { immediate: true },
 );
 
-function updateSheetScrollState() {
-  const element = sheetTabs.value;
-  if (!element) return;
-  const maxScrollLeft = Math.max(0, element.scrollWidth - element.clientWidth);
-  canScrollLeft.value = element.scrollLeft > 1;
-  canScrollRight.value = element.scrollLeft < maxScrollLeft - 1;
-}
-
 function revealActiveSheet(reset = false) {
   const element = sheetTabs.value;
   if (!element) return;
   if (reset) element.scrollLeft = 0;
   const active = element.querySelector<HTMLElement>(".sheet-tab.active");
   if (active) {
-    const visibleLeft = element.scrollLeft + SHEET_EDGE_CONTROL_WIDTH;
-    const visibleRight = element.scrollLeft + element.clientWidth - SHEET_EDGE_CONTROL_WIDTH;
+    const visibleLeft = element.scrollLeft;
+    const visibleRight = element.scrollLeft + element.clientWidth;
     const tabLeft = active.offsetLeft;
     const tabRight = tabLeft + active.offsetWidth;
     if (tabLeft < visibleLeft) {
-      element.scrollLeft = Math.max(0, tabLeft - SHEET_EDGE_CONTROL_WIDTH);
+      element.scrollLeft = Math.max(0, tabLeft);
     } else if (tabRight > visibleRight) {
-      element.scrollLeft = tabRight - element.clientWidth + SHEET_EDGE_CONTROL_WIDTH;
+      element.scrollLeft = tabRight - element.clientWidth;
     }
   }
-  updateSheetScrollState();
 }
 
 function settleSheetLayout(reset = false) {
@@ -81,16 +67,6 @@ function settleSheetLayout(reset = false) {
     revealActiveSheet(reset);
     layoutFrame = window.requestAnimationFrame(() => revealActiveSheet(false));
   });
-}
-
-function scrollSheets(direction: -1 | 1) {
-  const element = sheetTabs.value;
-  if (!element) return;
-  element.scrollBy({
-    left: direction * Math.max(180, element.clientWidth * 0.7),
-    behavior: "smooth",
-  });
-  window.setTimeout(updateSheetScrollState, 220);
 }
 
 watch(
@@ -149,21 +125,11 @@ function moveSheet(event: KeyboardEvent, currentIndex: number, delta: number) {
 <template>
   <section v-if="sheets.length" class="notes-panel">
     <div class="sheet-tab-bar">
-      <button
-        type="button"
-        class="sheet-scroll-button"
-        :disabled="!canScrollLeft"
-        aria-label="向左查看更多结论 Sheet"
-        @click="scrollSheets(-1)"
-      >
-        <IconChevronLeft :size="15" :stroke-width="1.8" aria-hidden="true" />
-      </button>
       <div
         ref="sheetTabs"
         class="sheet-tabs"
         role="tablist"
         aria-label="结论主题"
-        @scroll="updateSheetScrollState"
       >
         <button
           v-for="(sheet, index) in sheets"
@@ -186,15 +152,6 @@ function moveSheet(event: KeyboardEvent, currentIndex: number, delta: number) {
           <b>{{ sheet.notes.length }}</b>
         </button>
       </div>
-      <button
-        type="button"
-        class="sheet-scroll-button"
-        :disabled="!canScrollRight"
-        aria-label="向右查看更多结论 Sheet"
-        @click="scrollSheets(1)"
-      >
-        <IconChevronRight :size="15" :stroke-width="1.8" aria-hidden="true" />
-      </button>
     </div>
 
     <div class="sheet-workbook">

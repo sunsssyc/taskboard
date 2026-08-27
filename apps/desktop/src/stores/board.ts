@@ -116,6 +116,14 @@ export const useBoardStore = defineStore("board", () => {
     allProjects.value.filter((project) => project.archived),
   );
   const orderedProjects = computed(() => sortProjectsByPrefs(projects.value, viewPrefs.value));
+  const pinnedProjects = computed(() => {
+    const pinned = new Set(viewPrefs.value.pinned);
+    return orderedProjects.value.filter((project) => pinned.has(project.key));
+  });
+  const regularProjects = computed(() => {
+    const pinned = new Set(viewPrefs.value.pinned);
+    return orderedProjects.value.filter((project) => !pinned.has(project.key));
+  });
   const selectedProject = computed<BoardProject | null>(() => {
     if (!selectedProjectKey.value) return null;
     return projects.value.find((project) => project.key === selectedProjectKey.value) ?? null;
@@ -400,6 +408,8 @@ export const useBoardStore = defineStore("board", () => {
     projects,
     archivedProjects,
     orderedProjects,
+    pinnedProjects,
+    regularProjects,
     visibleProjects,
     displayProjects,
     selectedProject,

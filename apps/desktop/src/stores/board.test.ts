@@ -236,6 +236,18 @@ describe("board search", () => {
     expect(ordered.map((project) => project.key)).toEqual(["taskboard", "reg-calibration"]);
   });
 
+  it("separates pinned projects from the regular sidebar collection", () => {
+    const board = useBoardStore();
+    board.snapshot = demoSnapshot;
+    board.viewPrefs = {
+      order: ["reg-calibration", "taskboard"],
+      pinned: ["taskboard"],
+    };
+
+    expect(board.pinnedProjects.map((project) => project.key)).toEqual(["taskboard"]);
+    expect(board.regularProjects.map((project) => project.key)).toEqual(["reg-calibration"]);
+  });
+
   it("moves projects before or after the drop target", () => {
     expect(moveProjectOrder(["a", "b", "c"], "c", "a", true)).toEqual(["c", "a", "b"]);
     expect(moveProjectOrder(["a", "b", "c"], "a", "b", false)).toEqual(["b", "a", "c"]);

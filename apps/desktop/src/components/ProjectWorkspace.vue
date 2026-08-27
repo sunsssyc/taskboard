@@ -24,19 +24,37 @@ defineEmits<{ showAll: [] }>();
     </div>
 
     <header class="project-heading">
-      <div class="project-heading-line">
-        <h2>{{ project.name }}</h2>
-        <code class="project-heading-key">{{ project.key }}</code>
-        <span
-          v-for="repository in project.repositories"
-          v-show="repository.name !== project.key"
-          :key="repository.name"
-          class="repository-chip"
-        >
-          {{ repository.name }}
-        </span>
+      <div class="project-heading-copy">
+        <div class="project-heading-line">
+          <h2>{{ project.name }}</h2>
+          <code v-if="!singleProject" class="project-heading-key">{{ project.key }}</code>
+        </div>
+        <p>{{ project.summary || "持续保存目标、进度、结论和下一步。" }}</p>
       </div>
-      <p>{{ project.summary || "持续保存目标、进度、结论和下一步。" }}</p>
+
+      <dl class="project-heading-meta" aria-label="需求概览">
+        <div class="project-heading-stat">
+          <dt>完成</dt>
+          <dd>{{ project.counts.done }}</dd>
+        </div>
+        <div class="project-heading-stat">
+          <dt>待办</dt>
+          <dd>{{ project.counts.todo }}</dd>
+        </div>
+        <div class="project-heading-repositories">
+          <dt>仓库</dt>
+          <dd>
+            <span
+              v-for="repository in project.repositories"
+              :key="repository.name"
+              class="repository-chip"
+            >
+              {{ repository.name }}
+            </span>
+            <span v-if="!project.repositories.length" class="project-heading-empty">未关联</span>
+          </dd>
+        </div>
+      </dl>
     </header>
 
     <TaskGroups :tasks="tasks" :project-key="project.key" :query="query" />
