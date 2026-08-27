@@ -293,6 +293,43 @@ def test_cli_review_caps_file_list(db, tmp_path, capsys):
     assert '6 个文件' in out and '还有 4 个文件' in out
 
 
+def test_cli_review_lists_untracked_separately_and_respects_gitignore(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    _repo_with_commit(repo)
+    (repo / '.gitignore').write_text('noise/\n', encoding='utf-8')
+    assert run(db, 'init', 'fresh', '--name', '新文件', '--repo', str(repo)) == 0
+    assert run(db, 'add', '新建了文件', '-p', 'fresh') == 0
+    assert run(db, 'start', '1', '-p', 'fresh') == 0
+    (repo / 'seed.txt').write_text('seed\nchanged\n', encoding='utf-8')
+    (repo / 'brand_new.py').write_text('a = 1\nb = 2\n', encoding='utf-8')
+    (repo / 'noise').mkdir()
+    (repo / 'noise' / 'junk.tmp').write_text('垃圾\n', encoding='utf-8')
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'fresh') == 0
+    out = capsys.readouterr().out
+    assert 'brand_new.py' in out              # 未跟踪的新文件要看得见
+    assert '未跟踪的新文件' in out
+    assert 'junk.tmp' not in out              # 被 .gitignore 挡掉,不重做一套排除规则
+    # 规模只算已跟踪的改动:未跟踪文件不能让这个数字随桌面上的临时文件波动
+    assert '1 个文件' in out
+
+
+def test_cli_review_committed_flag_ignores_working_tree(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    _repo_with_commit(repo)
+    assert run(db, 'init', 'strict', '--name', '只看已提交', '--repo', str(repo)) == 0
+    assert run(db, 'add', '在办任务', '-p', 'strict') == 0
+    assert run(db, 'start', '1', '-p', 'strict') == 0
+    (repo / 'seed.txt').write_text('seed\n未提交的改动\n', encoding='utf-8')
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'strict', '--committed') == 0
+    out = capsys.readouterr().out
+    assert '工作区(含未提交)' not in out
+    assert '区间不完整' in out                 # 还没 done,没有终点,如实说
+
+
 def test_cli_export_html_and_json(db, tmp_path, capsys):
     repo = tmp_path / 'repo'
     repo.mkdir()

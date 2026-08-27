@@ -9,17 +9,20 @@ import subprocess
 from pathlib import Path
 
 
-def _rev_parse_raw(repo: str | Path | None, argv: list[str]) -> str | None:
+def _run_git(repo: str | Path | None, argv: list[str], timeout: int = 10) -> str | None:
     try:
         result = subprocess.run(
-            ['git', '-C', str(repo or Path.cwd()), 'rev-parse', *argv],
-            capture_output=True, text=True, timeout=3,
+            ['git', '-C', str(repo or Path.cwd()), *argv],
+            capture_output=True, text=True, timeout=timeout,
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    if result.returncode != 0:
-        return None
-    return result.stdout.strip() or None
+    return result.stdout if result.returncode == 0 else None
+
+
+def _rev_parse_raw(repo: str | Path | None, argv: list[str]) -> str | None:
+    out = _run_git(repo, ['rev-parse', *argv], timeout=3)
+    return out.strip() or None if out is not None else None
 
 
 def _rev_parse(repo: str | Path | None, rev: str) -> str | None:
@@ -100,3 +103,30 @@ def worktree_for(repo: str | Path) -> Path:
 def worktree_head_sha(repo: str | Path) -> str | None:
     tree = worktree_for(repo)
     return head_sha(tree) or head_sha(repo)
+
+
+def untracked_files(repo: str | Path, limit: int = 50) -> list[dict]:
+    """未跟踪的新文件。
+
+    过滤直接用 git 自己的 --exclude-standard(.gitignore + .git/info/exclude +
+    全局 core.excludesFile),不在看板里重做一套排除规则——那只会变成 gitignore 的
+    劣质副本,且和 git status 看到的不一致。剩下的噪音是仓库卫生问题,该改 gitignore。
+    """
+    listed = _run_git(repo, ['ls-files', '--others', '--exclude-standard'])
+    if listed is None:
+        return []
+    files = []
+    for path in listed.splitlines()[:limit]:
+        full = Path(repo) / path
+        try:
+            raw = full.read_bytes()
+        except OSError:
+            continue
+        binary = b'\x00' in raw[:8000]
+        files.append({
+            'path': path,
+            'added': 0 if binary else raw.count(b'\n') + (0 if raw.endswith(b'\n') else 1),
+            'deleted': 0,
+            'binary': binary,
+        })
+    return files

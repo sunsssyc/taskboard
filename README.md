@@ -125,6 +125,7 @@ board projects            # 所有需求的进度概览(命令名为兼容保留
 board show 3              # 单个任务详情
 board review 3            # 审查包:意图、改了哪些文件、期间定了什么结论
 board review 3 --diff     # 直接出 git diff,渲染交给 git/delta
+board review 3 --committed # 只看已提交区间,在办任务也不比工作区
 board log                 # 变更历史
 ```
 
@@ -303,7 +304,11 @@ sha 是否还在仓库里,rebase/squash 之后明说失效而不是给出错误�
 在 git worktree 里干活时(Agent 常这么开),用的是那棵工作树的 HEAD 而不是主检出的
 ——判据是两边 `--git-common-dir` 相同,即同一个仓库的另一棵树。`board review` 对在办
 任务比到工作区(含未提交),因为审 Agent 产出时改动往往还没提交;已完成任务比记录的
-两个端点。
+两个端点,`--committed` 可以强制只看已提交的。
+
+未跟踪的新文件单独一节列出,不计入改动规模——那个数字要拿去排序,不能随桌面上有什么
+临时文件波动。过滤直接用 git 的 `--exclude-standard`(`.gitignore` + `.git/info/exclude`
++ 全局 `core.excludesFile`),看板不重做一套排除规则;剩下的噪音是仓库卫生问题。
 
 并发:WAL + `busy_timeout`,`ref` 分配在 `BEGIN IMMEDIATE` 写锁下完成,配合
 `UNIQUE(project, ref)` 双保险,多个 CLI 进程同时写不会重号。

@@ -12,7 +12,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .gitref import diff_argv, diff_numstat, head_sha, worktree_for
+from .gitref import diff_argv, diff_numstat, head_sha, untracked_files, worktree_for
 from .render import STATUS_LABEL, html_document, render, render_json
 from .store import BoardError, Store, home_dir, load_view_prefs, validate_markdown_newlines
 
@@ -445,14 +445,15 @@ def cmd_show(store: Store, args) -> int:
     return 0
 
 
-def _effective_range(entry: dict, status: str) -> tuple[str | None, str | None, bool, str]:
+def _effective_range(entry: dict, status: str,
+                     committed_only: bool = False) -> tuple[str | None, str | None, bool, str]:
     """在办任务比到工作区,这样改到一半也能审;已完成任务用记录的两个端点。
 
     第四个返回值是该去哪个工作树看:在 worktree 里干活时,登记路径的工作区是别人的。
     """
     base, head = entry['base_sha'], entry['head_sha']
     tree = str(worktree_for(entry['path']))
-    if base and not head and status == 'active':
+    if base and not head and status == 'active' and not committed_only:
         live = head_sha(tree)
         if live:
             return base, live, True, tree
@@ -474,7 +475,7 @@ def cmd_review(store: Store, args) -> int:
     if args.diff:
         shown = 0
         for entry in ranges:
-            base, head, live, tree = _effective_range(entry, task['status'])
+            base, head, live, tree = _effective_range(entry, task['status'], args.committed)
             if not (base and head) or entry.get('missing'):
                 continue
             subprocess.run(
@@ -503,7 +504,7 @@ def cmd_review(store: Store, args) -> int:
     starts = [entry['base_at'] for entry in ranges if entry['base_at']]
     ends = [entry['head_at'] for entry in ranges if entry['head_at']]
     for entry in ranges:
-        base, head, live, tree = _effective_range(entry, task['status'])
+        base, head, live, tree = _effective_range(entry, task['status'], args.committed)
         label = _range_label(base, head, live)
         files = diff_numstat(tree, base, head, against_worktree=live)
         if entry.get('missing'):
@@ -525,6 +526,15 @@ def cmd_review(store: Store, args) -> int:
             print(f'  {size:<14}{item["path"]}')
         if len(ordered) > args.files:
             print(paint(f'  还有 {len(ordered) - args.files} 个文件,--files 看全部', DIM))
+        if live:
+            # 未跟踪文件单独列,不进上面的计数:那个数字是改动规模,是 C 层排序的输入,
+            # 不能随桌面上有什么临时文件波动。过滤已由 git 的 --exclude-standard 做掉。
+            fresh = untracked_files(tree)
+            if fresh:
+                print(paint(f'  未跟踪的新文件 {len(fresh)} 个(不计入上面的规模)', DIM))
+                for item in sorted(fresh, key=lambda x: x['added'], reverse=True)[:args.files]:
+                    size = '二进制' if item['binary'] else f'+{item["added"]}'
+                    print(paint(f'  {size:<14}{item["path"]}', DIM))
 
     hits = store.link_notes_touching(project, changed_paths)
     if hits:
@@ -862,6 +872,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument('ref', type=int)
     sp.add_argument('--diff', action='store_true', help='直接出 git diff,渲染交给 git/delta')
     sp.add_argument('--files', type=int, default=8, help='最多列几个文件(默认 8)')
+    sp.add_argument('--committed', action='store_true',
+                    help='只看已提交区间,在办任务也不比工作区')
     add_project_flag(sp)
     sp.set_defaults(func=cmd_review)
 
