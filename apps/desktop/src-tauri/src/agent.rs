@@ -1,11 +1,12 @@
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::env;
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::thread;
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use url::Url;
 
@@ -36,14 +37,30 @@ pub struct AgentLaunch {
 }
 
 pub struct CodexProcess {
-    child: Child,
-    _stdin: ChildStdin,
+    cancel: Sender<()>,
+    worker: Option<JoinHandle<()>>,
 }
 
 impl Drop for CodexProcess {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let _ = self.cancel.send(());
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[cfg(test)]
+impl CodexProcess {
+    pub fn wait_until_finished(&self, timeout: Duration) -> bool {
+        let deadline = Instant::now() + timeout;
+        while !self.worker.as_ref().is_some_and(JoinHandle::is_finished) {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+        true
     }
 }
 
@@ -66,7 +83,8 @@ fn validated_repository(value: &str) -> Result<PathBuf, String> {
             path.display()
         ));
     }
-    Ok(path)
+    fs::canonicalize(&path)
+        .map_err(|error| format!("无法解析 Agent 工作目录 {}：{error}", path.display()))
 }
 
 fn dispatch_id(provider: &str, reference: u32) -> String {
@@ -206,10 +224,8 @@ fn rpc_call(
 fn spawn_stdout_reader(stdout: impl std::io::Read + Send + 'static) -> Receiver<String> {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
-        for line in BufReader::new(stdout).lines() {
-            if let Ok(line) = line {
-                let _ = sender.send(line);
-            }
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            let _ = sender.send(line);
         }
     });
     receiver
@@ -223,6 +239,110 @@ fn drain_output(output: impl std::io::Read + Send + 'static) {
             }
         }
     });
+}
+
+fn project_id_from_list(projects: &Value, repository: &Path) -> Option<String> {
+    projects
+        .get("data")?
+        .as_array()?
+        .iter()
+        .find(|project| {
+            project
+                .get("roots")
+                .and_then(Value::as_array)
+                .is_some_and(|roots| {
+                    roots.iter().any(|root| {
+                        root.get("path")
+                            .and_then(Value::as_str)
+                            .and_then(|path| fs::canonicalize(path).ok())
+                            .as_deref()
+                            == Some(repository)
+                    })
+                })
+        })?
+        .get("id")?
+        .as_str()
+        .map(str::to_owned)
+}
+
+fn codex_project_id(
+    stdin: &mut ChildStdin,
+    receiver: &Receiver<String>,
+    repository: &Path,
+    next_rpc_id: &mut u64,
+) -> Result<String, String> {
+    let mut cursor: Option<String> = None;
+    loop {
+        let result = rpc_call(
+            stdin,
+            receiver,
+            *next_rpc_id,
+            "project/list",
+            json!({ "cursor": cursor, "limit": 100 }),
+        )?;
+        *next_rpc_id += 1;
+        if let Some(project_id) = project_id_from_list(&result, repository) {
+            return Ok(project_id);
+        }
+        cursor = result
+            .get("nextCursor")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    let name = repository
+        .file_name()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("repo");
+    let created = rpc_call(
+        stdin,
+        receiver,
+        *next_rpc_id,
+        "project/create",
+        json!({
+            "idempotencyKey": format!("taskboard-project:{}", repository.display()),
+            "name": name,
+            "roots": [{ "path": repository }],
+            "metadata": { "source": "taskboard" }
+        }),
+    )?;
+    *next_rpc_id += 1;
+    created
+        .pointer("/project/id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| "Codex project/create 未返回项目 ID".to_string())
+}
+
+fn codex_thread_url(thread_id: &str) -> Result<Url, String> {
+    let thread_id = clean_text(thread_id, "Codex 线程 ID", 120)?;
+    let mut url = Url::parse("codex://threads/")
+        .map_err(|error| format!("无法生成 Codex 线程深链：{error}"))?;
+    url.path_segments_mut()
+        .map_err(|_| "无法生成 Codex 线程深链".to_string())?
+        .push(&thread_id);
+    Ok(url)
+}
+
+fn open_codex_thread(thread_id: &str) -> Result<(), String> {
+    let url = codex_thread_url(thread_id)?;
+    let output = Command::new("/usr/bin/open")
+        .arg(url.as_str())
+        .output()
+        .map_err(|error| format!("无法打开 Codex 线程：{error}"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    Err(if stderr.is_empty() {
+        format!("Codex 线程打开失败：{}", output.status)
+    } else {
+        format!("Codex 线程打开失败：{stderr}")
+    })
 }
 
 fn open_codex_workspace(executable: &Path, repository: &Path) -> Result<(), String> {
@@ -242,11 +362,47 @@ fn open_codex_workspace(executable: &Path, repository: &Path) -> Result<(), Stri
     })
 }
 
+fn turn_completed(message: &str, turn_id: &str) -> bool {
+    let Ok(message) = serde_json::from_str::<Value>(message) else {
+        return false;
+    };
+    message.get("method").and_then(Value::as_str) == Some("turn/completed")
+        && message.pointer("/params/turn/id").and_then(Value::as_str) == Some(turn_id)
+}
+
+fn monitor_codex_turn(
+    mut child: Child,
+    stdin: ChildStdin,
+    receiver: Receiver<String>,
+    cancel: Receiver<()>,
+    thread_id: String,
+    turn_id: String,
+) {
+    let should_open = loop {
+        match cancel.try_recv() {
+            Ok(()) | Err(TryRecvError::Disconnected) => break false,
+            Err(TryRecvError::Empty) => {}
+        }
+        match receiver.recv_timeout(Duration::from_millis(250)) {
+            Ok(message) if turn_completed(&message, &turn_id) => break true,
+            Ok(_) | Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => break true,
+        }
+    };
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+    if should_open {
+        let _ = open_codex_thread(&thread_id);
+    }
+}
+
 fn launch_codex(
     request: &AgentDispatchRequest,
     repository: &Path,
     dispatch_id: String,
     prompt: String,
+    sandbox: &str,
 ) -> Result<(AgentLaunch, CodexProcess), String> {
     if !desktop_codex_installed() {
         return Err("未安装 ChatGPT/Codex 桌面应用".into());
@@ -280,41 +436,53 @@ fn launch_codex(
             "initialize",
             json!({
                 "clientInfo": { "name": "taskboard", "title": "Taskboard", "version": "0.1.0" },
-                "capabilities": { "experimentalApi": false }
+                "capabilities": { "experimentalApi": true }
             }),
         )?;
         send_message(&mut stdin, &json!({ "method": "initialized" }))?;
+        let mut next_rpc_id = 2;
+        let project_id = codex_project_id(&mut stdin, &receiver, repository, &mut next_rpc_id)?;
         let thread = rpc_call(
             &mut stdin,
             &receiver,
-            2,
+            next_rpc_id,
             "thread/start",
             json!({
                 "cwd": repository,
                 "approvalPolicy": "never",
-                "sandbox": "workspace-write",
-                "serviceName": "taskboard"
+                "sandbox": sandbox,
+                "serviceName": "taskboard",
+                "projectId": project_id
             }),
         )?;
+        next_rpc_id += 1;
         let thread_id = thread
             .pointer("/thread/id")
             .and_then(Value::as_str)
             .ok_or_else(|| "Codex thread/start 未返回线程 ID".to_string())?
             .to_owned();
+        let assigned_project_id = thread.pointer("/thread/projectId").and_then(Value::as_str);
+        if assigned_project_id != Some(project_id.as_str()) {
+            return Err(format!(
+                "Codex thread/start 未绑定目标项目：期望 {project_id}，实际 {}",
+                assigned_project_id.unwrap_or("未分配")
+            ));
+        }
         rpc_call(
             &mut stdin,
             &receiver,
-            3,
+            next_rpc_id,
             "thread/name/set",
             json!({
                 "threadId": thread_id,
                 "name": format!("#{} {}", request.reference, request.title.trim())
             }),
         )?;
+        next_rpc_id += 1;
         let turn = rpc_call(
             &mut stdin,
             &receiver,
-            4,
+            next_rpc_id,
             "turn/start",
             json!({
                 "threadId": thread_id,
@@ -339,6 +507,19 @@ fn launch_codex(
         }
     };
     let warning = open_codex_workspace(&executable, repository).err();
+    let (cancel_sender, cancel_receiver) = mpsc::channel();
+    let monitor_thread_id = thread_id.clone();
+    let monitor_turn_id = turn_id.clone();
+    let worker = thread::spawn(move || {
+        monitor_codex_turn(
+            child,
+            stdin,
+            receiver,
+            cancel_receiver,
+            monitor_thread_id,
+            monitor_turn_id,
+        )
+    });
     Ok((
         AgentLaunch {
             provider: "codex".into(),
@@ -350,8 +531,8 @@ fn launch_codex(
             warning,
         },
         CodexProcess {
-            child,
-            _stdin: stdin,
+            cancel: cancel_sender,
+            worker: Some(worker),
         },
     ))
 }
@@ -398,8 +579,9 @@ fn launch_claude(
     })
 }
 
-pub fn launch(
+fn launch_with_codex_sandbox(
     request: &AgentDispatchRequest,
+    codex_sandbox: &str,
 ) -> Result<(AgentLaunch, Option<CodexProcess>), String> {
     let repository = validated_repository(&request.repository_path)?;
     let provider = clean_text(&request.provider, "Agent", 20)?.to_lowercase();
@@ -410,12 +592,26 @@ pub fn launch(
     let prompt = task_prompt(request, &dispatch_id)?;
     match provider.as_str() {
         "codex" => {
-            let (launch, process) = launch_codex(request, &repository, dispatch_id, prompt)?;
+            let (launch, process) =
+                launch_codex(request, &repository, dispatch_id, prompt, codex_sandbox)?;
             Ok((launch, Some(process)))
         }
         "claude" => Ok((launch_claude(&repository, dispatch_id, prompt)?, None)),
         _ => unreachable!(),
     }
+}
+
+pub fn launch(
+    request: &AgentDispatchRequest,
+) -> Result<(AgentLaunch, Option<CodexProcess>), String> {
+    launch_with_codex_sandbox(request, "workspace-write")
+}
+
+#[cfg(test)]
+pub fn launch_read_only_smoke(
+    request: &AgentDispatchRequest,
+) -> Result<(AgentLaunch, Option<CodexProcess>), String> {
+    launch_with_codex_sandbox(request, "read-only")
 }
 
 #[cfg(test)]
@@ -442,7 +638,13 @@ mod tests {
         assert!(prompt.contains("派发标识：dispatch-33"));
         assert!(prompt.contains("任务：#33 接入桌面 Agent"));
         assert!(prompt.contains("验收条件：\n记录线程 ID。"));
-        assert!(prompt.contains(repository.to_string_lossy().as_ref()));
+        assert!(prompt.contains(
+            repository
+                .canonicalize()
+                .unwrap()
+                .to_string_lossy()
+                .as_ref()
+        ));
     }
 
     #[test]
@@ -461,6 +663,30 @@ mod tests {
     }
 
     #[test]
+    fn codex_deep_link_targets_created_thread() {
+        let url =
+            codex_thread_url("01a0421d-f35b-7772-99ae-11dc0015b797").expect("URL should build");
+        assert_eq!(
+            url.as_str(),
+            "codex://threads/01a0421d-f35b-7772-99ae-11dc0015b797"
+        );
+    }
+
+    #[test]
+    fn completion_notification_matches_only_target_turn() {
+        let matching = json!({
+            "method": "turn/completed",
+            "params": { "turn": { "id": "turn-33" } }
+        });
+        let other = json!({
+            "method": "turn/completed",
+            "params": { "turn": { "id": "turn-34" } }
+        });
+        assert!(turn_completed(&matching.to_string(), "turn-33"));
+        assert!(!turn_completed(&other.to_string(), "turn-33"));
+    }
+
+    #[test]
     fn repository_must_exist_and_be_absolute() {
         let mut invalid = request(Path::new("relative"));
         assert!(task_prompt(&invalid, "dispatch")
@@ -470,5 +696,26 @@ mod tests {
         assert!(task_prompt(&invalid, "dispatch")
             .unwrap_err()
             .contains("不存在"));
+    }
+
+    #[test]
+    fn project_lookup_matches_canonical_repository_root() {
+        let repository = std::env::temp_dir().canonicalize().unwrap();
+        let projects = json!({
+            "data": [
+                {
+                    "id": "project-other",
+                    "roots": [{ "path": "/private/var/empty" }]
+                },
+                {
+                    "id": "project-repo",
+                    "roots": [{ "path": repository }]
+                }
+            ]
+        });
+        assert_eq!(
+            project_id_from_list(&projects, &repository).as_deref(),
+            Some("project-repo")
+        );
     }
 }

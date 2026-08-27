@@ -680,8 +680,13 @@ mod tests {
     fn real_codex_dispatch_smoke_records_public_ids() {
         let root =
             env::temp_dir().join(format!("taskboard-real-agent-smoke-{}", std::process::id()));
-        let repository = root.join("repo");
+        let repository = env::var_os("TASKBOARD_AGENT_SMOKE_REPOSITORY")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.join("repo"));
         fs::create_dir_all(&repository).expect("smoke repository should exist");
+        let repository = repository
+            .canonicalize()
+            .expect("smoke repository should resolve");
         let database = root.join("board.db");
         let python = env::var("TASKBOARD_PYTHON").unwrap_or_else(|_| "python3".into());
         let attempt = CommandAttempt {
@@ -712,9 +717,9 @@ mod tests {
                 "--db".into(),
                 database_text.clone(),
                 "add".into(),
-                "仅回复 SMOKE_OK，不修改文件".into(),
+                "仅回复 TASKBOARD_TEMP_REPO_SMOKE_OK，不修改文件".into(),
                 "--detail".into(),
-                "读取提示后只回复 SMOKE_OK。".into(),
+                "读取提示后只回复 TASKBOARD_TEMP_REPO_SMOKE_OK。".into(),
                 "--accept".into(),
                 "不得创建、修改或删除任何文件。".into(),
                 "--repo".into(),
@@ -734,8 +739,12 @@ mod tests {
             repository_path: repository_text,
         };
         let trusted = trusted_agent_request(&database, &request).expect("task should be trusted");
-        assert_eq!(trusted.title, "仅回复 SMOKE_OK，不修改文件");
-        let (launch, process) = agent::launch(&trusted).expect("Codex should accept the turn");
+        assert_eq!(
+            trusted.title,
+            "仅回复 TASKBOARD_TEMP_REPO_SMOKE_OK，不修改文件"
+        );
+        let (launch, process) =
+            agent::launch_read_only_smoke(&trusted).expect("Codex should accept the turn");
         let started_at =
             record_agent_launch(&database, "smoke", 1, &launch).expect("run should persist");
         println!(
@@ -745,8 +754,11 @@ mod tests {
         );
         assert!(launch.external_thread_id.is_some());
         assert!(launch.external_turn_id.is_some());
-        assert!(process.is_some());
-        std::thread::sleep(std::time::Duration::from_secs(5));
+        let process = process.expect("Codex monitor should be retained");
+        assert!(
+            process.wait_until_finished(std::time::Duration::from_secs(55)),
+            "Codex smoke turn should finish and hand off to the desktop app"
+        );
         drop(process);
         let snapshot = execute(&attempt, Some(&database_text)).expect("snapshot should reload");
         assert_eq!(
