@@ -397,6 +397,64 @@ def test_cli_done_stays_quiet_when_tree_is_clean(db, tmp_path, capsys):
     assert '未提交' not in capsys.readouterr().out
 
 
+def test_cli_concept_align_flow_across_projects(db, tmp_path, capsys):
+    repo = tmp_path / 'svc'
+    git = _repo_with_commit(repo)
+    assert run(db, 'init', 'alpha', '--name', '需求A', '--repo', str(repo)) == 0
+    assert run(db, 'init', 'beta', '--name', '需求B') == 0
+    assert run(db, 'set', '-p', 'beta', '--repo', str(repo)) == 0
+    assert run(db, 'add', '做点事', '-p', 'alpha') == 0
+    capsys.readouterr()
+
+    assert run(db, 'concept', '增量对账用水位线', '--why', '全量扫描随数据增长',
+               '--file', 'seed.txt', '--task', '1', '-p', 'alpha') == 0
+    out = capsys.readouterr().out
+    assert '待对齐' in out and '锚点 seed.txt' in out
+
+    # 另一个需求也看得到:概念归仓库,不归需求
+    assert run(db, 'concepts', '-p', 'beta') == 0
+    assert '增量对账用水位线' in capsys.readouterr().out
+    assert run(db, 'notes', '-p', 'beta') == 0
+    assert '待你确认 1' in capsys.readouterr().out
+
+    assert run(db, 'align', '1') == 0
+    assert '已对齐' in capsys.readouterr().out
+
+    (repo / 'seed.txt').write_text('seed\n改了锚点\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '动了锚点文件')
+    assert run(db, 'concepts', '-p', 'alpha') == 0
+    assert '需重新对齐' in capsys.readouterr().out
+
+
+def test_cli_concept_rejects_with_reason(db, tmp_path, capsys):
+    repo = tmp_path / 'svc'
+    _repo_with_commit(repo)
+    assert run(db, 'init', 'solo', '--name', '单需求', '--repo', str(repo)) == 0
+    assert run(db, 'concept', '可疑概念', '-p', 'solo') == 0
+    capsys.readouterr()
+
+    assert run(db, 'align', '1', '--reject', '这不算新概念') == 0
+    out = capsys.readouterr().out
+    assert '已否决' in out and '这不算新概念' in out
+    assert run(db, 'concepts', '-p', 'solo') == 0
+    assert '还没有概念' in capsys.readouterr().out
+
+
+def test_cli_concept_requires_repo_when_workstream_has_several(db, tmp_path, capsys):
+    backend = tmp_path / 'backend'
+    frontend = tmp_path / 'frontend'
+    _repo_with_commit(backend)
+    _repo_with_commit(frontend)
+    assert run(db, 'init', 'multi', '--name', '跨仓库',
+               '--repo', str(backend), '--repo', str(frontend)) == 0
+    capsys.readouterr()
+
+    assert run(db, 'concept', '某个概念', '-p', 'multi') == 1
+    assert '--repo' in capsys.readouterr().err
+    assert run(db, 'concept', '某个概念', '-p', 'multi', '--repo', 'backend') == 0
+
+
 def test_cli_export_html_and_json(db, tmp_path, capsys):
     repo = tmp_path / 'repo'
     repo.mkdir()

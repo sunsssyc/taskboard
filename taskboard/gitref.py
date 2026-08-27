@@ -174,3 +174,12 @@ def dirty_files(repo: str | Path) -> list[str]:
     if out is None:
         return []
     return [line[3:] for line in out.splitlines() if line.strip()]
+
+
+def commits_touching(repo: str | Path, since: str | None, paths: list[str]) -> bool:
+    """since 之后有没有提交动过这些路径——概念对齐是否失效就看这个。"""
+    if not since or not paths:
+        return False
+    out = _run_git(repo, ['log', '--max-count=1', '--format=%h', f'{since}..HEAD',
+                          '--', *paths])
+    return bool(out and out.strip())

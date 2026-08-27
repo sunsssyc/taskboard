@@ -404,6 +404,109 @@ def test_range_ignores_cwd_belonging_to_another_repository(store, tmp_path, monk
     assert entry['base_sha'] == _head(target)
     assert entry['base_sha'] != _head(stranger)
 
+@pytest.fixture()
+def shared(store, tmp_path):
+    """一个仓库、两个需求——概念共享的最小场景。"""
+    repo = _git_repo(tmp_path / 'svc')
+    (repo / 'sync.py').write_text('def sync(): pass\n', encoding='utf-8')
+    (repo / 'api.py').write_text('def api(): pass\n', encoding='utf-8')
+    _git(repo, 'add', '-A')
+    _git(repo, 'commit', '-q', '-m', '基线')
+    store.create_project('alpha', '需求A', repositories=[str(repo)])
+    store.create_project('beta', '需求B', repositories=[str(repo)])
+    return repo
+
+
+def test_concept_belongs_to_repository_and_is_shared_across_projects(store, shared):
+    concept = store.add_concept(
+        str(shared), '增量对账用水位线', body='全量扫描随数据增长', files=['sync.py:sync'],
+        project='alpha',
+    )
+
+    assert concept['repository'] == 'svc'
+    assert concept['state'] == 'proposed'
+    assert [item['path'] for item in concept['files']] == ['sync.py']
+    # 出处是 alpha,但 beta 同样看得到——不必重新解释一遍
+    assert [entry['id'] for entry in store.concepts(project='beta')] == [concept['id']]
+    assert [entry['id'] for entry in store.concepts(project='alpha')] == [concept['id']]
+
+
+def test_concept_length_caps_are_enforced(store, shared):
+    with pytest.raises(BoardError, match='上限'):
+        store.add_concept(str(shared), '很长的标题' * 15, project='alpha')
+    with pytest.raises(BoardError, match='第二堵墙'):
+        store.add_concept(str(shared), '正常标题', body='啰嗦' * 300, project='alpha')
+    with pytest.raises(BoardError, match='一句话'):
+        store.add_concept(str(shared), '   ', project='alpha')
+
+
+def test_task_can_introduce_at_most_three_concepts(store, shared):
+    task = store.add_task('alpha', '一个任务')
+    for index in range(3):
+        store.add_concept(str(shared), f'概念{index}', project='alpha', task_ref=task['ref'])
+
+    with pytest.raises(BoardError, match='该拆'):
+        store.add_concept(str(shared), '第四个', project='alpha', task_ref=task['ref'])
+
+    # 被否决的不占额度:否决说明它本来就不该算一个概念
+    rejected = store.concepts(project='alpha')[0]
+    store.reject_concept(rejected['id'], '这不算新概念')
+    assert store.add_concept(str(shared), '补位的', project='alpha', task_ref=task['ref'])
+
+
+def test_alignment_goes_stale_only_when_anchors_move(store, shared):
+    concept = store.add_concept(
+        str(shared), '水位线', files=['sync.py'], project='alpha',
+    )
+    aligned = store.align_concept(concept['id'])
+    assert aligned['state'] == 'aligned'
+    assert aligned['aligned_commit'] == _head(shared)
+
+    (shared / 'api.py').write_text('def api(): return 1\n', encoding='utf-8')
+    _git(shared, 'add', '-A')
+    _git(shared, 'commit', '-q', '-m', '改了别的文件')
+    assert store.concept(concept['id'])['state'] == 'aligned'
+
+    (shared / 'sync.py').write_text('def sync(): return 1\n', encoding='utf-8')
+    _git(shared, 'add', '-A')
+    _git(shared, 'commit', '-q', '-m', '改了锚点文件')
+    assert store.concept(concept['id'])['state'] == 'stale'
+
+    # 重新对齐后锚到新提交,回到 aligned
+    assert store.align_concept(concept['id'])['state'] == 'aligned'
+
+
+def test_rejecting_a_concept_requires_a_reason_and_lands_in_the_event_log(store, shared):
+    concept = store.add_concept(str(shared), '可疑的概念', project='alpha')
+    with pytest.raises(BoardError, match='理由'):
+        store.reject_concept(concept['id'], '  ')
+
+    store.reject_concept(concept['id'], '方案本身不对')
+
+    assert store.concept(concept['id'])['state'] == 'rejected'
+    assert store.concepts(project='alpha') == []
+    payloads = [event['payload'] or '' for event in store.events(limit=10)]
+    assert any('方案本身不对' in payload for payload in payloads)
+    with pytest.raises(BoardError, match='已被否决'):
+        store.align_concept(concept['id'])
+
+
+def test_concepts_touching_reports_hits_for_changed_paths(store, shared):
+    concept = store.add_concept(str(shared), '水位线', files=['sync.py'], project='alpha')
+    repository_id = store.find_repository(str(shared))['id']
+
+    hits = store.concepts_touching(repository_id, ['sync.py', 'README.md'])
+    assert [entry['id'] for entry in hits] == [concept['id']]
+    assert store.concepts_touching(repository_id, ['README.md']) == []
+
+
+def test_search_finds_concepts_proposed_under_another_project(store, shared):
+    store.add_concept(str(shared), '水位线增量对账', project='alpha')
+
+    found = store.search('水位线', project='beta')['notes']
+
+    assert [note['title'] for note in found] == ['水位线增量对账']
+
 def test_dropped_tasks_are_not_actionable(store):
     task = store.add_task('demo', '放弃的')
     store.set_status('demo', task['ref'], 'dropped')

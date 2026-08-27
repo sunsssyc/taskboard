@@ -471,6 +471,82 @@ def _range_label(base: str | None, head: str | None, live: bool) -> str:
     return f'{base or "?"}..{head or "?"}(区间不完整)'
 
 
+CONCEPT_STATE_LABEL = {
+    'proposed': '待对齐', 'aligned': '已对齐', 'stale': '需重新对齐', 'rejected': '已否决',
+}
+CONCEPT_STATE_COLOR = {
+    'proposed': CYAN, 'aligned': '\033[32m', 'stale': '\033[33m', 'rejected': DIM,
+}
+
+
+def print_concept(entry: dict, verbose: bool = False) -> None:
+    state = paint(CONCEPT_STATE_LABEL[entry['state']], CONCEPT_STATE_COLOR[entry['state']])
+    print(f'{paint("[" + str(entry["id"]) + "]", DIM)} {entry["title"]}  {state}'
+          f'  {paint(entry["repository"] or "", DIM)}')
+    if verbose and entry['body']:
+        print(f'    {entry["body"]}')
+    if verbose and entry['files']:
+        anchors = '、'.join(
+            item['path'] + (f':{item["symbol"]}' if item['symbol'] else '')
+            for item in entry['files']
+        )
+        print(paint(f'    锚点 {anchors}', DIM))
+    if entry['state'] == 'stale':
+        print(paint(f'    对齐于 {entry["aligned_commit"]},之后锚点文件动过', DIM))
+
+
+def cmd_concept(store: Store, args) -> int:
+    validate_markdown_newlines(args.why)
+    project = None
+    if args.project:
+        project = store.get_project(args.project)['key']
+    repository = args.repo
+    if not repository:
+        candidates = store.project_repositories(project) if project else []
+        if len(candidates) != 1:
+            raise BoardError('多仓库需求要用 --repo 指明这个概念属于哪个仓库')
+        repository = candidates[0]['path']
+    entry = store.add_concept(
+        repository, args.title, body=args.why, files=args.file,
+        project=project, task_ref=args.task, category=args.category,
+    )
+    print_concept(entry, verbose=True)
+    print(paint(f'  等人确认:board align {entry["id"]}', DIM))
+    return 0
+
+
+def cmd_concepts(store: Store, args) -> int:
+    project = None if args.all_projects else resolve_project(store, args.project)
+    entries = store.concepts(
+        project=project, repository=args.repo, include_rejected=args.rejected,
+    )
+    if not entries:
+        print('还没有概念。board concept "一句话" --why "为什么选它" --file path:symbol')
+        return 0
+    for state in ('proposed', 'stale', 'aligned', 'rejected'):
+        group = [entry for entry in entries if entry['state'] == state]
+        if not group:
+            continue
+        print(paint(f'{CONCEPT_STATE_LABEL[state]} {len(group)}', BOLD))
+        for entry in group:
+            print_concept(entry, verbose=args.verbose or state in ('proposed', 'stale'))
+        print()
+    return 0
+
+
+def cmd_align(store: Store, args) -> int:
+    if args.reject:
+        entry = store.reject_concept(args.id, args.reject)
+        print(f'已否决 [{entry["id"]}] {entry["title"]}')
+        print(paint(f'  理由 {args.reject}', DIM))
+        return 0
+    entry = store.align_concept(args.id, note=args.note)
+    print(f'已对齐 [{entry["id"]}] {entry["title"]}')
+    print(paint(f'  锚在 {entry["repository"]} {entry["aligned_commit"]},'
+                f'之后锚点文件动过会提示重新对齐', DIM))
+    return 0
+
+
 COMMIT_LIST_LIMIT = 10
 
 
@@ -672,7 +748,7 @@ def cmd_dep(store: Store, args) -> int:
     return 0
 
 
-NOTE_LABEL = {'finding': '结论', 'risk': '尾巴', 'link': '文件'}
+NOTE_LABEL = {'finding': '结论', 'risk': '尾巴', 'link': '文件', 'concept': '概念'}
 
 
 def _note_cmd(kind: str):
@@ -693,6 +769,17 @@ def _note_cmd(kind: str):
 
 def cmd_notes(store: Store, args) -> int:
     project = resolve_project(store, args.project)
+    # 概念按仓库列:同一仓库下别的需求提的概念,对这个需求同样有效,不该重新解释一遍
+    concepts = store.concepts(project=project)
+    pending = [entry for entry in concepts if entry['state'] in ('proposed', 'stale')]
+    if concepts:
+        aligned = len(concepts) - len(pending)
+        print(paint(f'概念 · 待你确认 {len(pending)} · 已对齐 {aligned}', BOLD))
+        for entry in pending:
+            print_concept(entry, verbose=args.verbose)
+        if pending:
+            print(paint('  board align <id> 确认,或 board align <id> --reject "理由"', DIM))
+        print()
     labels = {'finding': '约束性结论', 'risk': '尾巴与风险', 'link': '关键文件'}
     for kind, label in labels.items():
         notes = store._note_dicts(project, kind)
@@ -984,6 +1071,32 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument('--supersedes', help='推翻哪几条旧记录(id,逗号分隔);旧记录保留但标记失效')
         add_project_flag(sp)
         sp.set_defaults(func=_note_cmd(kind))
+
+    sp = sub.add_parser('concept', help='登记一个待人确认的概念(归属仓库,跨需求共享)')
+    sp.add_argument('title', help='一句话:是什么、解决什么问题')
+    sp.add_argument('--why', help='为什么选它、替代方案为何不用')
+    sp.add_argument('--file', action='append', metavar='PATH[:SYMBOL]',
+                    help='代码坐标,只给位置不贴代码;可重复传入')
+    sp.add_argument('--task', type=int, help='由哪个任务引入(每任务最多 3 个)')
+    sp.add_argument('--repo', help='属于哪个仓库(单仓库需求可省略)')
+    sp.add_argument('--category')
+    add_project_flag(sp)
+    sp.set_defaults(func=cmd_concept)
+
+    sp = sub.add_parser('concepts', help='列概念:待对齐/需重新对齐/已对齐')
+    sp.add_argument('-v', '--verbose', action='store_true')
+    sp.add_argument('--rejected', action='store_true', help='含已否决的')
+    sp.add_argument('--repo', help='只看某个仓库')
+    sp.add_argument('-A', '--all-projects', action='store_true')
+    add_project_flag(sp)
+    sp.set_defaults(func=cmd_concepts)
+
+    sp = sub.add_parser('align', help='人确认理解了这个概念(或否决它)')
+    sp.add_argument('id', type=int)
+    sp.add_argument('--note', help='对齐时想补一句')
+    sp.add_argument('--reject', metavar='理由',
+                    help='否决:不算新概念,或方案本身不对')
+    sp.set_defaults(func=cmd_align)
 
     sp = sub.add_parser('notes', help='列结论/尾巴/文件(默认只列有效的)')
     sp.add_argument('-v', '--verbose', action='store_true')

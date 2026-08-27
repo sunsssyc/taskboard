@@ -1,7 +1,7 @@
 # Taskboard：把 Agent 产出变成可分诊、可对齐的审查队列
 
 > 调研日期：2026-08-27
-> 状态：A、B 层已实现（任务 #35、#38）；C+E 已登记（#39、#41）；D 待定去留
+> 状态：A、B、E 层已实现（#35、#38、#39）；C 层待做（#41）；D 待定去留
 
 ## 问题
 
@@ -85,9 +85,7 @@ level 契约"在两边各记各的——前者有「Qwen3.8 思考 A/B 参数口
 
 输出分三档并附一行理由：**必须先对齐 / 精读 / 可跳过**。默认只打印今天该读的前 N 条，不打印全量列表——全量列表本身就是过载的一部分。
 
-### E. 概念对齐
-
-> 排期上与 C 层绑定，见「排期」。
+### E. 概念对齐（已实现，任务 #39）
 
 **对齐的单位是概念，不是任务。** 挂在任务上，每个任务都要重付一次理解成本，和现在读 diff 一样贵；挂在概念上才摊薄——一个概念对齐一次，后面几十个任务都受益。
 
@@ -135,7 +133,7 @@ E 层落地后这一层可能变得多余：概念对齐本身就是人做过判
 
 ## 接入点
 
-- `SCHEMA` 与 `_migrate`（[store.py:97](../taskboard/store.py:97) 起）：`notes` 加 `aligned_at`、`aligned_commit`、`repository_id`；`project` 对 `kind='concept'` 放开为可空（现在是 `NOT NULL ... ON DELETE CASCADE`，挂在需求上的概念会随需求一起没）；新表 `note_files`；[`NOTE_KINDS`](../taskboard/store.py:22) 加 `concept`
+- `SCHEMA` 与 `_migrate`（[store.py:97](../taskboard/store.py:97) 起）：`notes` 加 `aligned_at`、`aligned_commit`、`repository_id`。**实现时的偏离**：`project` 保留 `NOT NULL`，改用新增的 `repository_id` 作为作用域键，`project` 降级为出处（哪个需求提出来的）。放开 `NOT NULL` 在 SQLite 里要重建整张表，而 `_migrate` 一直是「就地补列」的路子；且看板没有删需求的命令，级联丢失只是理论风险。用户可见行为一致：概念按仓库共享，归档需求不影响；新表 `note_files`；[`NOTE_KINDS`](../taskboard/store.py:22) 加 `concept`
 - 所有按 `project` 过滤记录的查询要能带出该需求关联仓库的概念（`_note_dicts`、`board notes`、`board find`）
 - [store.py:1059](../taskboard/store.py:1059) `snapshot()`：概念与对齐状态从这里出，保持渲染与 CLI 同一份数据
 - `taskboard/cli.py`：`board concept` / `board concepts` / `board align`，与现有 `finding`/`risk`/`link` 共用 `_note_cmd` 骨架
@@ -154,7 +152,7 @@ E 层落地后这一层可能变得多余：概念对齐本身就是人做过判
 
 1. ~~**A 层区间**~~ —— 已完成，见任务 #35
 2. ~~**B 层 `board review <ref>`**~~ —— 已完成，见任务 #38
-3. **C 层 + E 层一起**（E 提供 C 的主排序信号，C 是 E 不沦为橡皮图章的唯一保证，拆开做两边都残废）
+3. ~~**E 层**~~ 已完成（#39）。**C 层**（#41）必须紧接着做：E 提供 C 的主排序信号，而 C 是 E 不沦为橡皮图章的唯一保证——E 单独存在的时间越长，对齐越可能退化成走过场
 4. **D 层**（等 C+E 用一段时间再决定是否还需要）
 
 ## 前置决策
