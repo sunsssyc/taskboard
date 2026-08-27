@@ -481,8 +481,9 @@ CONCEPT_STATE_COLOR = {
 
 def print_concept(entry: dict, verbose: bool = False) -> None:
     state = paint(CONCEPT_STATE_LABEL[entry['state']], CONCEPT_STATE_COLOR[entry['state']])
+    scope = entry['repository'] or f'{entry["project"]}(需求概念)'
     print(f'{paint("[" + str(entry["id"]) + "]", DIM)} {entry["title"]}  {state}'
-          f'  {paint(entry["repository"] or "", DIM)}')
+          f'  {paint(scope, DIM)}')
     if verbose and entry['body']:
         print(f'    {entry["body"]}')
     if verbose and entry['files']:
@@ -503,10 +504,11 @@ def cmd_concept(store: Store, args) -> int:
     if args.project:
         project = store.get_project(args.project)['key']
     repository = args.repo
-    if not repository:
+    if not repository and args.file:
+        # 只有代码锚点非要落在某个仓库里;方法论概念不该被逼着挑一个仓库
         candidates = store.project_repositories(project) if project else []
         if len(candidates) != 1:
-            raise BoardError('多仓库需求要用 --repo 指明这个概念属于哪个仓库')
+            raise BoardError('传了 --file 且需求关联多个仓库,用 --repo 指明锚点在哪个仓库')
         repository = candidates[0]['path']
     entry = store.add_concept(
         repository, args.title, body=args.why, files=args.file,
@@ -533,6 +535,19 @@ def cmd_concepts(store: Store, args) -> int:
         for entry in group:
             print_concept(entry, verbose=args.verbose or state in ('proposed', 'stale'))
         print()
+    return 0
+
+
+def cmd_concept_edit(store: Store, args) -> int:
+    validate_markdown_newlines(args.why)
+    entry = store.update_concept(
+        args.id, title=args.title, body=args.why, files=args.file,
+        category=args.category, keep_aligned=args.keep_aligned,
+    )
+    print_concept(entry, verbose=True)
+    if entry.get('alignment_reset'):
+        print(paint('  措辞变了,已退回待对齐——你当初点头认的是旧那句话', DIM))
+        print(paint(f'  确实只是改说法就:board align {entry["id"]}', DIM))
     return 0
 
 
@@ -1092,6 +1107,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument('-A', '--all-projects', action='store_true')
     add_project_flag(sp)
     sp.set_defaults(func=cmd_concepts)
+
+    sp = sub.add_parser('concept-edit', help='改概念卡:追问后补充或修正措辞')
+    sp.add_argument('id', type=int)
+    sp.add_argument('--title')
+    sp.add_argument('--why')
+    sp.add_argument('--file', action='append', metavar='PATH[:SYMBOL]',
+                    help='替换全部代码锚点;可重复传入')
+    sp.add_argument('--category')
+    sp.add_argument('--keep-aligned', dest='keep_aligned', action='store_true',
+                    help='只改了说法、意思没变时保留已对齐状态')
+    sp.set_defaults(func=cmd_concept_edit)
 
     sp = sub.add_parser('align', help='人确认理解了这个概念(或否决它)')
     sp.add_argument('id', type=int)

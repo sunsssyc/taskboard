@@ -569,6 +569,87 @@ def test_unknown_symbol_falls_back_to_whole_file(store, symbol_repo):
     assert stale['state'] == 'stale'
     assert stale['moved'] == ['core.py']
 
+def test_editing_wording_sends_a_concept_back_for_realignment(store, shared):
+    concept = store.add_concept(
+        str(shared), '措辞有歧义的标题', body='原来的理由', files=['sync.py:sync'],
+        project='alpha')
+    store.align_concept(concept['id'])
+
+    edited = store.update_concept(concept['id'], title='改清楚之后的标题')
+
+    # 人当初点头认的是旧那句话,换了说法等于还没看过
+    assert edited['state'] == 'proposed'
+    assert edited['alignment_reset'] is True
+    assert edited['aligned_commit'] is None
+
+
+def test_keep_aligned_survives_a_pure_rewording(store, shared):
+    concept = store.add_concept(str(shared), '原标题', project='alpha')
+    store.align_concept(concept['id'])
+
+    edited = store.update_concept(concept['id'], title='意思一样的新标题', keep_aligned=True)
+
+    assert edited['state'] == 'aligned'
+    assert edited['alignment_reset'] is False
+
+
+def test_editing_anchors_keeps_alignment_and_allows_two_symbols_per_file(store, shared):
+    concept = store.add_concept(
+        str(shared), '锚点会变的概念', files=['sync.py:sync'], project='alpha')
+    store.align_concept(concept['id'])
+
+    edited = store.update_concept(concept['id'], files=['sync.py:sync', 'sync.py:helper'])
+
+    # 概念本身没变,只是位置说得更准了
+    assert edited['state'] == 'aligned'
+    # 旧主键 (note_id, repo, path) 只放得下一行,同一文件的两个函数会被吃掉
+    assert sorted(item['symbol'] for item in edited['files']) == ['helper', 'sync']
+
+
+def test_rejected_concept_cannot_be_edited(store, shared):
+    concept = store.add_concept(str(shared), '会被否决的', project='alpha')
+    store.reject_concept(concept['id'], '不算新概念')
+
+    with pytest.raises(BoardError, match='新提一张卡'):
+        store.update_concept(concept['id'], title='还想抢救一下')
+
+
+def test_empty_edit_is_rejected(store, shared):
+    concept = store.add_concept(str(shared), '不动的概念', project='alpha')
+    with pytest.raises(BoardError, match='没有要改的内容'):
+        store.update_concept(concept['id'])
+
+
+def test_workstream_concept_needs_no_repository_and_never_goes_stale(store, shared):
+    """方法论、领域惯例这类概念不挂在某段代码上,强行挑一个仓库只会让归属变成掷骰子。"""
+    method = store.add_concept(
+        None, 'KS 值只在同一时间窗内可比', body='不同窗的样本分布不同', project='alpha')
+    code = store.add_concept(
+        str(shared), '对账走水位线', files=['sync.py'], project='alpha')
+    store.align_concept(method['id'])
+    store.align_concept(code['id'])
+
+    assert method['repository'] is None
+    assert store.concept(method['id'])['aligned_commit'] is None
+
+    (shared / 'sync.py').write_text('def sync(): return 1\n', encoding='utf-8')
+    _git(shared, 'add', '-A')
+    _git(shared, 'commit', '-q', '-m', '改了代码')
+
+    assert store.concept(code['id'])['state'] == 'stale'
+    assert store.concept(method['id'])['state'] == 'aligned'
+    # 需求概念按 project 归属:列在该需求下,但不属于 beta
+    assert method['id'] in [entry['id'] for entry in store.concepts(project='alpha')]
+    assert method['id'] not in [entry['id'] for entry in store.concepts(project='beta')]
+
+
+def test_workstream_concept_rejects_code_anchors(store, shared):
+    with pytest.raises(BoardError, match='代码锚点必须落在某个仓库里'):
+        store.add_concept(None, '方法论', files=['sync.py'], project='alpha')
+    method = store.add_concept(None, '方法论', project='alpha')
+    with pytest.raises(BoardError, match='加不了代码锚点'):
+        store.update_concept(method['id'], files=['sync.py'])
+
 def test_dropped_tasks_are_not_actionable(store):
     task = store.add_task('demo', '放弃的')
     store.set_status('demo', task['ref'], 'dropped')

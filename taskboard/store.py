@@ -172,9 +172,10 @@ CREATE TABLE IF NOT EXISTS deps (
     blocked_by_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     PRIMARY KEY (task_id, blocked_by_id)
 );
--- concept 的归属是仓库(repository_id),不是需求:概念记的是"这套代码是怎么回事",
--- finding/risk 记的是"推进某个目标时做的判断"。project 对 concept 只是出处(哪个需求
--- 提出来的),不参与作用域——同一仓库下的概念在所有关联需求间共享,对齐一次处处生效。
+-- concept 有两种作用域。带 repository_id 的是代码概念:记"这套代码是怎么回事",在该
+-- 仓库的所有关联需求间共享,锚点被改动会转 stale。repository_id 为空的是需求概念:
+-- 方法论、领域惯例这类不挂在某段代码上的东西,按 project 共享,不随代码失效。
+-- finding/risk 记的是"推进某个目标时做的判断",始终属于需求。
 CREATE TABLE IF NOT EXISTS notes (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     project        TEXT NOT NULL REFERENCES projects(key) ON DELETE CASCADE,
@@ -196,8 +197,9 @@ CREATE TABLE IF NOT EXISTS note_files (
     note_id       INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
     repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
     path          TEXT NOT NULL,
-    symbol        TEXT,
-    PRIMARY KEY (note_id, repository_id, path)
+    -- 空串表示"整个文件",不用 NULL:复合主键里 NULL 互不相等,会放进重复行
+    symbol        TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (note_id, repository_id, path, symbol)
 );
 -- superseded_by:被哪条记录推翻(NULL=当前有效)。旧结论不删除,保留
 -- "曾经这么认为、被什么推翻"这条信息,防止在同一问题上反复改判。
@@ -258,6 +260,7 @@ class Store:
         self.conn.execute(
             'CREATE INDEX IF NOT EXISTS idx_notes_repository ON notes(repository_id, kind)'
         )
+        self._rebuild_note_files_pk()
         self._add_columns('tasks', {
             'accept': 'TEXT', 'branch': 'TEXT', 'pr': 'TEXT',
             'priority': f'INTEGER NOT NULL DEFAULT {DEFAULT_PRIORITY}',
@@ -283,6 +286,30 @@ class Store:
                 'SELECT id, ? FROM tasks WHERE project = ?',
                 (repository_id, project['key']),
             )
+
+    def _rebuild_note_files_pk(self) -> None:
+        """把 note_files 主键从 (note_id, repo, path) 升到带 symbol 的四列。
+
+        旧主键让一个文件只能锚一个函数,而概念常常要同时指向同一文件里的两处。
+        表是新加的、行数很少,直接搬一次比留个补丁便宜。
+        """
+        columns = list(self.conn.execute('PRAGMA table_info(note_files)'))
+        if not columns or any(row['name'] == 'symbol' and row['pk'] for row in columns):
+            return
+        self.conn.executescript("""
+            ALTER TABLE note_files RENAME TO note_files_old;
+            CREATE TABLE note_files (
+                note_id       INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+                path          TEXT NOT NULL,
+                symbol        TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (note_id, repository_id, path, symbol)
+            );
+            INSERT OR IGNORE INTO note_files (note_id, repository_id, path, symbol)
+                SELECT note_id, repository_id, path, COALESCE(symbol, '')
+                FROM note_files_old;
+            DROP TABLE note_files_old;
+        """)
 
     def close(self) -> None:
         self.conn.close()
@@ -1059,27 +1086,22 @@ class Store:
             raise BoardError(f'没有编号 {note_id} 的概念')
         return row
 
-    def add_concept(self, repository: str, title: str, body: str | None = None,
+    def add_concept(self, repository: str | None, title: str, body: str | None = None,
                     files: list[str] | None = None, project: str | None = None,
                     task_ref: int | None = None, category: str | None = None) -> dict:
         """登记一个待对齐的概念。
 
-        归属仓库;project 只是出处(哪个需求提出来的),不参与作用域。
+        传了 repository 就是代码概念:归那个仓库,在它的所有关联需求间共享,锚点动了会
+        转 stale。不传就是需求概念:方法论、领域惯例这类不挂在某段代码上的东西,归需求,
+        不随代码失效——强行给它挑一个仓库只会让归属变成掷骰子。
         """
         title = (title or '').strip()
-        if not title:
-            raise BoardError('概念要有一句话标题:说清是什么、解决什么问题')
-        if len(title) > CONCEPT_TITLE_LIMIT:
-            raise BoardError(
-                f'概念标题 {len(title)} 字,上限 {CONCEPT_TITLE_LIMIT} 字——'
-                '一句话说不清就说明还没想清楚'
-            )
-        if body and len(body) > CONCEPT_BODY_LIMIT:
-            raise BoardError(
-                f'概念正文 {len(body)} 字,上限 {CONCEPT_BODY_LIMIT} 字——'
-                '概念卡必须比它解释的改动短,否则它就是第二堵墙'
-            )
-        repo = self.find_repository(repository)
+        self._check_concept_text(title, body)
+        repo = self.find_repository(repository) if repository else None
+        if repo is None and files:
+            raise BoardError('传了 --file 就要指明仓库:代码锚点必须落在某个仓库里')
+        if repo is None and not project:
+            raise BoardError('需求概念要用 -p 指明属于哪个需求')
         owner = project or self._project_for_repository(repo['id'])
         task_id = None
         if task_ref is not None:
@@ -1098,20 +1120,14 @@ class Store:
         cursor = self.conn.execute(
             'INSERT INTO notes (project, kind, category, title, body, repository_id,'
             ' task_id, created_at) VALUES (?,?,?,?,?,?,?,?)',
-            (owner, 'concept', category, title, body, repo['id'], task_id, stamp),
+            (owner, 'concept', category, title, body,
+             repo['id'] if repo else None, task_id, stamp),
         )
         note_id = int(cursor.lastrowid)
-        for token in files or []:
-            path, _, symbol = token.partition(':')
-            path = path.strip().lstrip('./')
-            if not path:
-                continue
-            self.conn.execute(
-                'INSERT OR IGNORE INTO note_files (note_id, repository_id, path, symbol)'
-                ' VALUES (?,?,?,?)', (note_id, repo['id'], path, symbol.strip() or None),
-            )
-        self.log_event('concept_added', project=owner, task_ref=task_ref,
-                       note_id=note_id, repository=repo['name'], title=title)
+        if repo:
+            self._replace_note_files(note_id, repo['id'], files or [])
+        self.log_event('concept_added', project=owner, task_ref=task_ref, note_id=note_id,
+                       repository=repo['name'] if repo else None, title=title)
         self.conn.commit()
         return self.concept(note_id)
 
@@ -1132,7 +1148,7 @@ class Store:
         entry['files'] = self._note_files(row['id'])
         repo = self.conn.execute(
             'SELECT name, path FROM repositories WHERE id = ?', (row['repository_id'],),
-        ).fetchone()
+        ).fetchone() if row['repository_id'] else None
         entry['repository'] = repo['name'] if repo else None
         entry['repository_path'] = repo['path'] if repo else None
         entry['moved'] = []
@@ -1162,20 +1178,29 @@ class Store:
     def concepts(self, project: str | None = None, repository: str | None = None,
                  include_rejected: bool = False, check_stale: bool = True) -> list[dict]:
         """按仓库取概念:同一仓库下的概念对所有关联需求可见,不按 project 过滤。"""
+        scopes: list[str] = []
+        args: list = []
         if repository:
             repository_ids = [self.find_repository(repository)['id']]
         elif project:
             repository_ids = [row['id'] for row in self.project_repositories(project)]
+            # 需求概念没有仓库,按 project 取:方法论不该因为需求换了仓库就看不见
+            scopes.append('(repository_id IS NULL AND project = ?)')
+            args.append(project)
         else:
             repository_ids = [row['id'] for row in self.repositories()]
-        if not repository_ids:
+            scopes.append('repository_id IS NULL')
+        if repository_ids:
+            scopes.append(
+                f'repository_id IN ({",".join("?" for _ in repository_ids)})')
+            args.extend(repository_ids)
+        if not scopes:
             return []
-        placeholders = ','.join('?' for _ in repository_ids)
         sql = (f"SELECT * FROM notes WHERE kind = 'concept' "
-               f'AND repository_id IN ({placeholders})')
+               f'AND ({" OR ".join(scopes)})')
         if not include_rejected:
             sql += ' AND rejected_at IS NULL'
-        rows = self.conn.execute(sql + ' ORDER BY id', repository_ids)
+        rows = self.conn.execute(sql + ' ORDER BY id', args)
         return [self._concept_dict(row, check_stale=check_stale) for row in rows]
 
     def align_concept(self, note_id: int, note: str | None = None) -> dict:
@@ -1185,7 +1210,8 @@ class Store:
             raise BoardError(f'概念 {note_id} 已被否决,不能再对齐')
         repo = self.conn.execute(
             'SELECT path, name FROM repositories WHERE id = ?', (row['repository_id'],),
-        ).fetchone()
+        ).fetchone() if row['repository_id'] else None
+        # 需求概念没有仓库,也就没有锚:它不随代码失效,不记 commit
         commit = worktree_head_sha(repo['path']) if repo else None
         self.conn.execute(
             'UPDATE notes SET aligned_at = ?, aligned_commit = ? WHERE id = ?',
@@ -1210,6 +1236,76 @@ class Store:
                        reason=reason)
         self.conn.commit()
         return self.concept(note_id, check_stale=False)
+
+    def _check_concept_text(self, title: str | None, body: str | None) -> None:
+        if title is not None:
+            if not title.strip():
+                raise BoardError('概念要有一句话标题:说清是什么、解决什么问题')
+            if len(title) > CONCEPT_TITLE_LIMIT:
+                raise BoardError(
+                    f'概念标题 {len(title)} 字,上限 {CONCEPT_TITLE_LIMIT} 字——'
+                    '一句话说不清就说明还没想清楚'
+                )
+        if body and len(body) > CONCEPT_BODY_LIMIT:
+            raise BoardError(
+                f'概念正文 {len(body)} 字,上限 {CONCEPT_BODY_LIMIT} 字——'
+                '概念卡必须比它解释的改动短,否则它就是第二堵墙'
+            )
+
+    def _replace_note_files(self, note_id: int, repository_id: int,
+                            files: list[str]) -> None:
+        self.conn.execute('DELETE FROM note_files WHERE note_id = ?', (note_id,))
+        for token in files:
+            path, _, symbol = token.partition(':')
+            path = path.strip().lstrip('./')
+            if not path:
+                continue
+            self.conn.execute(
+                'INSERT OR IGNORE INTO note_files (note_id, repository_id, path, symbol)'
+                ' VALUES (?,?,?,?)', (note_id, repository_id, path, symbol.strip()),
+            )
+
+    def update_concept(self, note_id: int, title: str | None = None,
+                       body: str | None = None, files: list[str] | None = None,
+                       category: str | None = None, keep_aligned: bool = False) -> dict:
+        """改概念卡。概念卡本来就该在追问中被修正,不该只能删了重提。
+
+        改了措辞就退回待对齐:人当初点头认的是旧那句话,换了说法等于还没看过。
+        改锚点不退回——概念没变,只是位置说得更准了,失效与否由锚点自己算。
+        """
+        row = self._concept_row(note_id)
+        if row['rejected_at']:
+            raise BoardError(f'概念 {note_id} 已被否决;改主意就新提一张卡,别翻旧账')
+        self._check_concept_text(title, body)
+        changed: list[str] = []
+        sets, args = [], []
+        for field, value in (('title', title), ('body', body), ('category', category)):
+            if value is None:
+                continue
+            if (row[field] or '') == value:
+                continue
+            sets.append(f'{field} = ?')
+            args.append(value)
+            changed.append(field)
+        reset = bool({'title', 'body'} & set(changed)) and row['aligned_at'] and not keep_aligned
+        if reset:
+            sets.extend(['aligned_at = NULL', 'aligned_commit = NULL'])
+        if sets:
+            self.conn.execute(f'UPDATE notes SET {", ".join(sets)} WHERE id = ?',
+                              [*args, note_id])
+        if files is not None:
+            if not row['repository_id']:
+                raise BoardError('需求概念没有仓库,加不了代码锚点;要锚代码就新提一张仓库概念')
+            self._replace_note_files(note_id, row['repository_id'], files)
+            changed.append('files')
+        if not changed:
+            raise BoardError('没有要改的内容:传 --title / --why / --file / --category')
+        self.log_event('concept_updated', project=row['project'], note_id=note_id,
+                       fields=sorted(changed), realigned=bool(reset))
+        self.conn.commit()
+        entry = self.concept(note_id)
+        entry['alignment_reset'] = bool(reset)
+        return entry
 
     def concepts_touching(self, repository_id: int, paths: list[str],
                           check_stale: bool = True) -> list[dict]:

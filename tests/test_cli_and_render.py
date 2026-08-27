@@ -441,7 +441,7 @@ def test_cli_concept_rejects_with_reason(db, tmp_path, capsys):
     assert '还没有概念' in capsys.readouterr().out
 
 
-def test_cli_concept_requires_repo_when_workstream_has_several(db, tmp_path, capsys):
+def test_cli_concept_repo_is_required_only_for_code_anchors(db, tmp_path, capsys):
     backend = tmp_path / 'backend'
     frontend = tmp_path / 'frontend'
     _repo_with_commit(backend)
@@ -450,9 +450,16 @@ def test_cli_concept_requires_repo_when_workstream_has_several(db, tmp_path, cap
                '--repo', str(backend), '--repo', str(frontend)) == 0
     capsys.readouterr()
 
-    assert run(db, 'concept', '某个概念', '-p', 'multi') == 1
+    # 有代码锚点就必须说清锚在哪个仓库
+    assert run(db, 'concept', '带锚点的', '-p', 'multi', '--file', 'seed.txt') == 1
     assert '--repo' in capsys.readouterr().err
-    assert run(db, 'concept', '某个概念', '-p', 'multi', '--repo', 'backend') == 0
+    assert run(db, 'concept', '带锚点的', '-p', 'multi',
+               '--file', 'seed.txt', '--repo', 'backend') == 0
+    capsys.readouterr()
+
+    # 方法论概念没有锚点,不该被逼着在两个仓库里挑一个
+    assert run(db, 'concept', 'KS 值只在同一时间窗内可比', '-p', 'multi') == 0
+    assert '需求概念' in capsys.readouterr().out
 
 
 def test_cli_export_html_and_json(db, tmp_path, capsys):
