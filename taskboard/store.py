@@ -12,7 +12,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .gitref import has_commit, head_sha
+from .gitref import has_commit, worktree_head_sha
 
 # waiting = 卡在人工/外部动作上(服务器执行、页面操作、等发版),我推不动;
 # 与"被依赖阻塞"是两回事,前者等的是人,后者等的是别的任务。
@@ -654,7 +654,7 @@ class Store:
         captured: dict[str, str] = {}
         stamp = now_iso()
         for repository in repositories:
-            sha = head_sha(repository['path'])
+            sha = worktree_head_sha(repository['path'])
             if not sha:
                 continue
             existing = self.conn.execute(
@@ -1010,6 +1010,41 @@ class Store:
             row['supersedes'] = sorted(overturned.get(row['id'], []))
             row['is_superseded'] = row['superseded_by'] is not None
         return sorted(rows, key=lambda row: (row['is_superseded'], row['id']))
+
+    def notes_between(self, project: str, start: str | None,
+                      end: str | None) -> dict[str, list[dict]]:
+        """区间内新增的记录、以及区间内被推翻的记录。
+
+        回答的是"做这个任务期间判定了什么、改判了什么",按时间戳而不是按任务归属——
+        记录本来就不挂任务,硬加归属会让人在写 finding 时多一个必须想清楚的问题。
+        """
+        def window(column: str) -> list[dict]:
+            sql = f'SELECT * FROM notes WHERE project = ? AND {column} IS NOT NULL'
+            args: list = [project]
+            if start:
+                sql += f' AND {column} >= ?'
+                args.append(start)
+            if end:
+                sql += f' AND {column} <= ?'
+                args.append(end)
+            return [dict(row) for row in self.conn.execute(sql + ' ORDER BY id', args)]
+
+        return {'added': window('created_at'), 'superseded': window('superseded_at')}
+
+    def link_notes_touching(self, project: str, paths: list[str]) -> list[dict]:
+        """改到的文件命中了哪些 link 记录。
+
+        link 现在把路径写在标题里(32 条中只有 17 条像路径),所以只能按前缀匹配;
+        note_files 落地后换成真正的 join,见任务 #40。
+        """
+        hits = []
+        for note in self.notes(project, 'link'):
+            title = (note['title'] or '').strip().strip('/')
+            if not title:
+                continue
+            if any(path == title or path.startswith(title + '/') for path in paths):
+                hits.append(dict(note))
+        return hits
 
     @staticmethod
     def _order_by_dependency(tasks: list[dict]) -> list[dict]:

@@ -191,6 +191,108 @@ def test_cli_start_and_done_print_commit_range(db, tmp_path, capsys):
     assert '改动 repo' in capsys.readouterr().out
 
 
+def _repo_with_commit(path, message='init'):
+    path.mkdir(parents=True, exist_ok=True)
+
+    def git(*argv):
+        subprocess.run(
+            ['git', '-C', str(path), '-c', 'user.email=t@t', '-c', 'user.name=t', *argv],
+            check=True, capture_output=True,
+        )
+
+    git('init', '-q')
+    (path / 'seed.txt').write_text('seed\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', message)
+    return git
+
+
+def test_cli_review_shows_range_files_and_window_notes(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    git = _repo_with_commit(repo)
+    assert run(db, 'init', 'rev', '--name', '审查', '--repo', str(repo)) == 0
+    assert run(db, 'add', '改点东西', '-p', 'rev', '--detail', '为了验证审查包',
+               '--accept', '能一屏看完') == 0
+    assert run(db, 'start', '1', '-p', 'rev') == 0
+    (repo / 'big.py').write_text('x = 1\n' * 30, encoding='utf-8')
+    (repo / 'small.py').write_text('y = 2\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '任务里的改动')
+    assert run(db, 'link', 'big.py', '-p', 'rev', '--body', '关键入口') == 0
+    assert run(db, 'done', '1', '-p', 'rev') == 0
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'rev') == 0
+    out = capsys.readouterr().out
+    assert '为了验证审查包' in out and '能一屏看完' in out
+    assert '2 个文件' in out
+    # 大文件排在前面:先看改得多的
+    assert out.index('big.py') < out.index('small.py')
+    assert '关键文件' in out          # link 命中被改的文件
+    assert '区间内结论' in out         # 区间内新增的记录
+
+
+def test_cli_review_of_active_task_includes_uncommitted_work(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    _repo_with_commit(repo)
+    assert run(db, 'init', 'wip', '--name', '在办', '--repo', str(repo)) == 0
+    assert run(db, 'add', '还没做完', '-p', 'wip') == 0
+    assert run(db, 'start', '1', '-p', 'wip') == 0
+    (repo / 'seed.txt').write_text('seed\nchanged\n', encoding='utf-8')
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'wip') == 0
+    out = capsys.readouterr().out
+    assert '工作区(含未提交)' in out
+    assert 'seed.txt' in out
+
+
+def test_cli_review_reports_unusable_range_instead_of_faking_one(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    git = _repo_with_commit(repo)
+    assert run(db, 'init', 'gone', '--name', '失效', '--repo', str(repo)) == 0
+    assert run(db, 'add', '会被改写', '-p', 'gone') == 0
+    assert run(db, 'start', '1', '-p', 'gone') == 0
+    git('commit', '-q', '--allow-empty', '-m', '原提交')
+    assert run(db, 'done', '1', '-p', 'gone') == 0
+    git('commit', '-q', '--allow-empty', '--amend', '-m', '改写后')
+    git('reflog', 'expire', '--expire=now', '--all')
+    git('gc', '-q', '--prune=now')
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'gone') == 0
+    out = capsys.readouterr().out
+    assert '已不在仓库里' in out and '个文件' not in out
+
+
+def test_cli_review_without_range_says_so(db, capsys):
+    assert run(db, 'init', 'bare', '--name', '没仓库') == 0
+    assert run(db, 'add', '没有关联仓库', '-p', 'bare') == 0
+    assert run(db, 'done', '1', '-p', 'bare') == 0
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'bare') == 0
+    assert '无区间记录' in capsys.readouterr().out
+
+
+def test_cli_review_caps_file_list(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    git = _repo_with_commit(repo)
+    assert run(db, 'init', 'many', '--name', '很多文件', '--repo', str(repo)) == 0
+    assert run(db, 'add', '改一堆', '-p', 'many') == 0
+    assert run(db, 'start', '1', '-p', 'many') == 0
+    for index in range(6):
+        (repo / f'f{index}.py').write_text(f'v = {index}\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '六个文件')
+    assert run(db, 'done', '1', '-p', 'many') == 0
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'many', '--files', '2') == 0
+    out = capsys.readouterr().out
+    assert '6 个文件' in out and '还有 4 个文件' in out
+
+
 def test_cli_export_html_and_json(db, tmp_path, capsys):
     repo = tmp_path / 'repo'
     repo.mkdir()

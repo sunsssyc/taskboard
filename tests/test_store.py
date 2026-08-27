@@ -372,6 +372,38 @@ def test_task_without_repository_records_no_range(store):
     store.set_status('demo', task['ref'], 'done')
     assert store.task_commits('demo', task['ref']) == []
 
+def test_range_follows_the_worktree_the_command_runs_in(store, tmp_path, monkeypatch):
+    """Agent 常在 git worktree 里干活,起点必须是那棵树的 HEAD,不是主检出的。"""
+    main = _git_repo(tmp_path / 'main')
+    _git(main, 'commit', '-q', '--allow-empty', '-m', '主检出又走了一步')
+    linked = tmp_path / 'linked'
+    _git(main, 'worktree', 'add', '-q', '--detach', str(linked), 'HEAD~1')
+    store.create_project('wt', '工作树', repositories=[str(main)])
+    task = store.add_task('wt', '在工作树里做')
+
+    monkeypatch.chdir(linked)
+    store.set_status('wt', task['ref'], 'active')
+
+    entry = store.task_commits('wt', task['ref'])[0]
+    assert entry['base_sha'] == _head(linked)
+    assert entry['base_sha'] != _head(main)
+
+
+def test_range_ignores_cwd_belonging_to_another_repository(store, tmp_path, monkeypatch):
+    """只认同一个仓库的另一棵工作树;换个仓库就退回登记路径,不重蹈按 cwd 乱取的覆辙。"""
+    target = _git_repo(tmp_path / 'target')
+    stranger = _git_repo(tmp_path / 'stranger')
+    _git(stranger, 'commit', '-q', '--allow-empty', '-m', '无关仓库的提交')
+    store.create_project('iso', '隔离', repositories=[str(target)])
+    task = store.add_task('iso', '在别的仓库里执行')
+
+    monkeypatch.chdir(stranger)
+    store.set_status('iso', task['ref'], 'active')
+
+    entry = store.task_commits('iso', task['ref'])[0]
+    assert entry['base_sha'] == _head(target)
+    assert entry['base_sha'] != _head(stranger)
+
 def test_dropped_tasks_are_not_actionable(store):
     task = store.add_task('demo', '放弃的')
     store.set_status('demo', task['ref'], 'dropped')

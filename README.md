@@ -123,6 +123,8 @@ board find <关键词>        # 搜任务与记录
 board stale --days 3      # 停滞的在办任务
 board projects            # 所有需求的进度概览(命令名为兼容保留)
 board show 3              # 单个任务详情
+board review 3            # 审查包:意图、改了哪些文件、期间定了什么结论
+board review 3 --diff     # 直接出 git diff,渲染交给 git/delta
 board log                 # 变更历史
 ```
 
@@ -297,6 +299,11 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 所以任务退回重做后区间仍覆盖全部改动。取 SHA 集中在 `taskboard/gitref.py`,按任务
 关联仓库逐个取,不看执行命令时的 cwd。两端齐全才算完整区间;`board show` 会顺带探测
 sha 是否还在仓库里,rebase/squash 之后明说失效而不是给出错误的 diff 范围。
+
+在 git worktree 里干活时(Agent 常这么开),用的是那棵工作树的 HEAD 而不是主检出的
+——判据是两边 `--git-common-dir` 相同,即同一个仓库的另一棵树。`board review` 对在办
+任务比到工作区(含未提交),因为审 Agent 产出时改动往往还没提交;已完成任务比记录的
+两个端点。
 
 并发:WAL + `busy_timeout`,`ref` 分配在 `BEGIN IMMEDIATE` 写锁下完成,配合
 `UNIQUE(project, ref)` 双保险,多个 CLI 进程同时写不会重号。

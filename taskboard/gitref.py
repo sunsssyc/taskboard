@@ -9,11 +9,10 @@ import subprocess
 from pathlib import Path
 
 
-def _rev_parse(repo: str | Path | None, rev: str) -> str | None:
+def _rev_parse_raw(repo: str | Path | None, argv: list[str]) -> str | None:
     try:
         result = subprocess.run(
-            ['git', '-C', str(repo or Path.cwd()), 'rev-parse', '--short', '--verify',
-             '--quiet', rev],
+            ['git', '-C', str(repo or Path.cwd()), 'rev-parse', *argv],
             capture_output=True, text=True, timeout=3,
         )
     except (OSError, subprocess.SubprocessError):
@@ -21,6 +20,10 @@ def _rev_parse(repo: str | Path | None, rev: str) -> str | None:
     if result.returncode != 0:
         return None
     return result.stdout.strip() or None
+
+
+def _rev_parse(repo: str | Path | None, rev: str) -> str | None:
+    return _rev_parse_raw(repo, ['--short', '--verify', '--quiet', rev])
 
 
 def head_sha(repo: str | Path | None = None) -> str | None:
@@ -33,3 +36,67 @@ def has_commit(repo: str | Path | None, sha: str | None) -> bool:
     if not sha:
         return False
     return _rev_parse(repo, f'{sha}^{{commit}}') is not None
+
+
+def diff_argv(base: str, head: str | None, against_worktree: bool) -> list[str]:
+    """在办任务比到工作区(含未提交):审 Agent 产出时,改动往往还没提交。"""
+    return [base] if against_worktree else [f'{base}..{head}']
+
+
+def diff_numstat(repo: str | Path, base: str | None, head: str | None,
+                 against_worktree: bool = False) -> list[dict] | None:
+    """区间的逐文件增删行数;区间不可用(缺端点或 sha 已失效)时返回 None。"""
+    if not base or not (head or against_worktree):
+        return None
+    try:
+        result = subprocess.run(
+            ['git', '-C', str(repo), 'diff', '--numstat',
+             *diff_argv(base, head, against_worktree)],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    files = []
+    for line in result.stdout.splitlines():
+        parts = line.split('\t')
+        if len(parts) != 3:
+            continue
+        added, deleted, path = parts
+        binary = '-' in (added, deleted)
+        files.append({
+            'path': path,
+            'added': 0 if binary else int(added),
+            'deleted': 0 if binary else int(deleted),
+            'binary': binary,
+        })
+    return files
+
+
+def _common_dir(path: str | Path) -> str | None:
+    """仓库的共享 .git 目录;同一仓库的多个工作树返回同一个值。"""
+    absolute = _rev_parse_raw(path, ['--path-format=absolute', '--git-common-dir'])
+    if absolute:
+        return absolute
+    relative = _rev_parse_raw(path, ['--git-common-dir'])
+    if not relative:
+        return None
+    return str((Path(path) / relative).resolve())
+
+
+def worktree_for(repo: str | Path) -> Path:
+    """这次该看哪个工作树:cwd 属于同一个仓库就用 cwd,否则用登记路径。
+
+    Agent 常在 git worktree 里干活(Claude Code 默认就这么开),此时仓库主检出的 HEAD
+    和工作区都不是这次改动。判据是两边 --git-common-dir 相同——即同一个仓库的另一个
+    工作树,而不是"随便哪个 cwd",这与此前按 cwd 乱取 sha 的缺陷不是一回事。
+    """
+    here = Path.cwd()
+    mine = _common_dir(here)
+    return here if mine and mine == _common_dir(repo) else Path(repo)
+
+
+def worktree_head_sha(repo: str | Path) -> str | None:
+    tree = worktree_for(repo)
+    return head_sha(tree) or head_sha(repo)

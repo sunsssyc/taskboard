@@ -8,10 +8,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
-from .gitref import head_sha
+from .gitref import diff_argv, diff_numstat, head_sha, worktree_for
 from .render import STATUS_LABEL, html_document, render, render_json
 from .store import BoardError, Store, home_dir, load_view_prefs, validate_markdown_newlines
 
@@ -444,6 +445,104 @@ def cmd_show(store: Store, args) -> int:
     return 0
 
 
+def _effective_range(entry: dict, status: str) -> tuple[str | None, str | None, bool, str]:
+    """在办任务比到工作区,这样改到一半也能审;已完成任务用记录的两个端点。
+
+    第四个返回值是该去哪个工作树看:在 worktree 里干活时,登记路径的工作区是别人的。
+    """
+    base, head = entry['base_sha'], entry['head_sha']
+    tree = str(worktree_for(entry['path']))
+    if base and not head and status == 'active':
+        live = head_sha(tree)
+        if live:
+            return base, live, True, tree
+    return base, head, False, entry['path']
+
+
+def _range_label(base: str | None, head: str | None, live: bool) -> str:
+    if live:
+        return f'{base}..工作区(含未提交)'
+    if base and head:
+        return f'{base}..{head}'
+    return f'{base or "?"}..{head or "?"}(区间不完整)'
+
+
+def cmd_review(store: Store, args) -> int:
+    project = resolve_project(store, args.project)
+    task = store.get_task(project, args.ref)
+    ranges = store.task_commits(project, args.ref, verify=True)
+    if args.diff:
+        shown = 0
+        for entry in ranges:
+            base, head, live, tree = _effective_range(entry, task['status'])
+            if not (base and head) or entry.get('missing'):
+                continue
+            subprocess.run(
+                ['git', '-C', tree, 'diff', *diff_argv(base, head, live)], check=False,
+            )
+            shown += 1
+        if not shown:
+            raise BoardError('没有可用区间,无法出 diff;先看 board review 的说明')
+        return 0
+
+    print(f'{paint("#" + str(task["ref"]), BOLD)} {task["title"]}')
+    meta = [STATUS_LABEL[task['status']], f'P{task["priority"]}']
+    if task['owner']:
+        meta.append(f'@{task["owner"]}')
+    print(paint('  ' + ' · '.join(meta), DIM))
+    if task['accept']:
+        print(paint(f'  验收 {task["accept"]}', CYAN))
+    if task['detail']:
+        print(f'\n{paint("为什么做", BOLD)}\n{task["detail"]}')
+
+    if not ranges:
+        print(paint('\n无区间记录:任务没有关联仓库,或在提交区间功能上线前就完成了', DIM))
+        return 0
+
+    changed_paths: list[str] = []
+    starts = [entry['base_at'] for entry in ranges if entry['base_at']]
+    ends = [entry['head_at'] for entry in ranges if entry['head_at']]
+    for entry in ranges:
+        base, head, live, tree = _effective_range(entry, task['status'])
+        label = _range_label(base, head, live)
+        files = diff_numstat(tree, base, head, against_worktree=live)
+        if entry.get('missing'):
+            gone = '、'.join(entry['missing'])
+            print(paint(f'\n改动 {entry["name"]} {label} — {gone} 已不在仓库里,无法出 diff', RED))
+            continue
+        if files is None:
+            print(paint(f'\n改动 {entry["name"]} {label} — 区间不可用', DIM))
+            continue
+        changed_paths.extend(item['path'] for item in files)
+        total_added = sum(item['added'] for item in files)
+        total_deleted = sum(item['deleted'] for item in files)
+        head_line = (f'\n{paint("改动", BOLD)} {entry["name"]} {label}  '
+                     f'{len(files)} 个文件 +{total_added} −{total_deleted}')
+        print(head_line)
+        ordered = sorted(files, key=lambda item: item['added'] + item['deleted'], reverse=True)
+        for item in ordered[:args.files]:
+            size = '二进制' if item['binary'] else f'+{item["added"]} −{item["deleted"]}'
+            print(f'  {size:<14}{item["path"]}')
+        if len(ordered) > args.files:
+            print(paint(f'  还有 {len(ordered) - args.files} 个文件,--files 看全部', DIM))
+
+    hits = store.link_notes_touching(project, changed_paths)
+    if hits:
+        print(f'\n{paint("关键文件", BOLD)}')
+        for note in hits:
+            print(f'  · {note["title"]}  {paint("[" + str(note["id"]) + "]", DIM)}')
+
+    window = store.notes_between(project, min(starts, default=None), max(ends, default=None))
+    if window['added'] or window['superseded']:
+        print(f'\n{paint("区间内结论", BOLD)}')
+        for note in window['added']:
+            print(f'  + [{note["id"]}] {note["title"]}')
+        for note in window['superseded']:
+            print(paint(f'  ↳ [{note["id"]}] {note["title"]} 已被 [{note["superseded_by"]}] 推翻',
+                        DIM))
+    return 0
+
+
 def _status_cmd(status: str):
     def handler(store: Store, args) -> int:
         project = resolve_project(store, args.project)
@@ -758,6 +857,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help='新路径已登记为另一个仓库时,把旧仓库的关联并过去并删掉旧登记')
     sp.add_argument('--force', action='store_true', help='新路径当前不存在也照样登记')
     sp.set_defaults(func=cmd_repo_move)
+
+    sp = sub.add_parser('review', help='单任务审查包:意图、改了哪些文件、期间定了什么结论')
+    sp.add_argument('ref', type=int)
+    sp.add_argument('--diff', action='store_true', help='直接出 git diff,渲染交给 git/delta')
+    sp.add_argument('--files', type=int, default=8, help='最多列几个文件(默认 8)')
+    add_project_flag(sp)
+    sp.set_defaults(func=cmd_review)
 
     sp = sub.add_parser('show', help='看单个任务')
     sp.add_argument('ref', type=int)
