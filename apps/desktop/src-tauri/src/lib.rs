@@ -1,3 +1,6 @@
+mod agent;
+
+use agent::{AgentDispatchRequest, AgentLaunch, CodexProcess};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::env;
@@ -18,6 +21,7 @@ struct ViewPrefs {
 #[derive(Default)]
 struct BridgeState {
     database: Mutex<Option<PathBuf>>,
+    codex_processes: Mutex<Vec<CodexProcess>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -26,6 +30,19 @@ struct LoadBoardResponse {
     snapshot: Value,
     source: String,
     view_prefs: ViewPrefs,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentDispatchResponse {
+    provider: String,
+    dispatch_id: String,
+    repository_path: String,
+    status: String,
+    external_thread_id: Option<String>,
+    external_turn_id: Option<String>,
+    started_at: String,
+    warning: Option<String>,
 }
 
 #[derive(Debug)]
@@ -285,6 +302,143 @@ fn owner_args(database: Option<&str>, reference: u32, project: &str, owner: &str
     args
 }
 
+fn agent_run_args(
+    database: &Path,
+    project: &str,
+    reference: u32,
+    launch: &AgentLaunch,
+) -> Vec<String> {
+    let mut args = vec![
+        "--db".into(),
+        database.to_string_lossy().into_owned(),
+        "agent-run".into(),
+        reference.to_string(),
+        "--provider".into(),
+        launch.provider.clone(),
+        "--dispatch-id".into(),
+        launch.dispatch_id.clone(),
+        "--repository".into(),
+        launch.repository_path.clone(),
+        "--status".into(),
+        launch.status.clone(),
+        "-p".into(),
+        project.into(),
+    ];
+    if let Some(thread_id) = &launch.external_thread_id {
+        args.extend(["--thread-id".into(), thread_id.clone()]);
+    }
+    if let Some(turn_id) = &launch.external_turn_id {
+        args.extend(["--turn-id".into(), turn_id.clone()]);
+    }
+    if let Some(warning) = &launch.warning {
+        args.extend(["--error".into(), warning.clone()]);
+    }
+    args
+}
+
+fn record_agent_launch(
+    database: &Path,
+    project: &str,
+    reference: u32,
+    launch: &AgentLaunch,
+) -> Result<String, String> {
+    let args = agent_run_args(database, project, reference, launch);
+    let mut errors = Vec::new();
+    for attempt in command_attempts() {
+        match run_board(&attempt, &args) {
+            Ok(stdout) => {
+                let row: Value = serde_json::from_slice(&stdout)
+                    .map_err(|error| format!("Agent 已启动，但看板返回无效记录：{error}"))?;
+                return row
+                    .get("started_at")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+                    .ok_or_else(|| "Agent 已启动，但看板记录缺少开始时间".to_string());
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+    Err(format!(
+        "Agent 已启动，但无法保存派发记录。已尝试：\n{}",
+        errors.join("\n")
+    ))
+}
+
+fn trusted_agent_request(
+    database: &Path,
+    request: &AgentDispatchRequest,
+) -> Result<AgentDispatchRequest, String> {
+    let database_text = database.to_string_lossy();
+    let mut errors = Vec::new();
+    for attempt in command_attempts() {
+        match execute(&attempt, Some(&database_text)) {
+            Ok(snapshot) => {
+                let project = snapshot
+                    .get("projects")
+                    .and_then(Value::as_array)
+                    .and_then(|projects| {
+                        projects.iter().find(|project| {
+                            project.get("key").and_then(Value::as_str)
+                                == Some(request.project.as_str())
+                        })
+                    })
+                    .ok_or_else(|| format!("看板里没有需求 {}", request.project))?;
+                let task = project
+                    .get("tasks")
+                    .and_then(Value::as_array)
+                    .and_then(|tasks| {
+                        tasks.iter().find(|task| {
+                            task.get("ref").and_then(Value::as_u64)
+                                == Some(u64::from(request.reference))
+                        })
+                    })
+                    .ok_or_else(|| {
+                        format!("{} 里没有任务 #{}", request.project, request.reference)
+                    })?;
+                let repository_allowed = task
+                    .get("repositories")
+                    .and_then(Value::as_array)
+                    .is_some_and(|repositories| {
+                        repositories.iter().any(|repository| {
+                            repository.get("path").and_then(Value::as_str)
+                                == Some(request.repository_path.as_str())
+                        })
+                    });
+                if !repository_allowed {
+                    return Err(format!(
+                        "仓库 {} 未关联到 {} #{}",
+                        request.repository_path, request.project, request.reference
+                    ));
+                }
+                return Ok(AgentDispatchRequest {
+                    provider: request.provider.clone(),
+                    project: request.project.clone(),
+                    reference: request.reference,
+                    title: task
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    detail: task
+                        .get("detail")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    accept: task
+                        .get("accept")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    repository_path: request.repository_path.clone(),
+                });
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+    Err(format!(
+        "无法核对待派发任务。已尝试：\n{}",
+        errors.join("\n")
+    ))
+}
+
 #[tauri::command]
 fn set_task_status(project: String, reference: u32, status: String) -> Result<(), String> {
     let subcommand = STATUS_SUBCOMMANDS
@@ -328,6 +482,40 @@ fn set_task_owner(project: String, reference: u32, owner: String) -> Result<(), 
 }
 
 #[tauri::command]
+fn dispatch_task_agent(
+    state: tauri::State<'_, BridgeState>,
+    request: AgentDispatchRequest,
+) -> Result<AgentDispatchResponse, String> {
+    let project = validated_project(&request.project)?.to_owned();
+    let database = state
+        .database
+        .lock()
+        .map_err(|_| "无法读取当前数据库路径".to_string())?
+        .clone()
+        .ok_or_else(|| "任务看板尚未载入，不能派发任务".to_string())?;
+    let request = trusted_agent_request(&database, &request)?;
+    let (launch, process) = agent::launch(&request)?;
+    let started_at = record_agent_launch(&database, &project, request.reference, &launch)?;
+    if let Some(process) = process {
+        state
+            .codex_processes
+            .lock()
+            .map_err(|_| "派发已记录，但无法保持 Codex app-server 连接".to_string())?
+            .push(process);
+    }
+    Ok(AgentDispatchResponse {
+        provider: launch.provider,
+        dispatch_id: launch.dispatch_id,
+        repository_path: launch.repository_path,
+        status: launch.status,
+        external_thread_id: launch.external_thread_id,
+        external_turn_id: launch.external_turn_id,
+        started_at,
+        warning: launch.warning,
+    })
+}
+
+#[tauri::command]
 fn save_view_prefs(
     state: tauri::State<'_, BridgeState>,
     prefs: ViewPrefs,
@@ -347,6 +535,7 @@ pub fn run() {
         .manage(BridgeState::default())
         .invoke_handler(tauri::generate_handler![
             load_board,
+            dispatch_task_agent,
             save_view_prefs,
             set_task_owner,
             set_task_status
@@ -453,6 +642,106 @@ mod tests {
             ]
         );
         assert_eq!(OWNER_VALUES, ["", "你", "我", "双方"]);
+    }
+
+    #[test]
+    fn agent_run_command_records_only_public_dispatch_ids() {
+        let launch = AgentLaunch {
+            provider: "codex".into(),
+            dispatch_id: "codex-123".into(),
+            repository_path: "/tmp/taskboard".into(),
+            status: "submitted".into(),
+            external_thread_id: Some("thread-1".into()),
+            external_turn_id: Some("turn-1".into()),
+            warning: None,
+        };
+        let args = agent_run_args(Path::new("/tmp/board.db"), "taskboard", 33, &launch);
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--thread-id", "thread-1"]));
+        assert!(args.windows(2).any(|pair| pair == ["--turn-id", "turn-1"]));
+        assert!(!args
+            .iter()
+            .any(|arg| arg.contains(".codex") || arg.contains("Claude")));
+    }
+
+    #[test]
+    #[ignore = "会创建真实 Codex 桌面线程，仅在手工验收 Agent 派发时运行"]
+    fn real_codex_dispatch_smoke_records_public_ids() {
+        let root =
+            env::temp_dir().join(format!("taskboard-real-agent-smoke-{}", std::process::id()));
+        let repository = root.join("repo");
+        fs::create_dir_all(&repository).expect("smoke repository should exist");
+        let database = root.join("board.db");
+        let python = env::var("TASKBOARD_PYTHON").unwrap_or_else(|_| "python3".into());
+        let attempt = CommandAttempt {
+            program: python,
+            prefix_args: vec!["-m".into(), "taskboard.cli".into()],
+            current_dir: Some(development_root()),
+            source: "smoke Python bridge".into(),
+        };
+        let database_text = database.to_string_lossy().into_owned();
+        let repository_text = repository.to_string_lossy().into_owned();
+        run_board(
+            &attempt,
+            &[
+                "--db".into(),
+                database_text.clone(),
+                "init".into(),
+                "smoke".into(),
+                "--name".into(),
+                "Agent Smoke".into(),
+                "--repo".into(),
+                repository_text.clone(),
+            ],
+        )
+        .expect("smoke project should initialize");
+        run_board(
+            &attempt,
+            &[
+                "--db".into(),
+                database_text.clone(),
+                "add".into(),
+                "仅回复 SMOKE_OK，不修改文件".into(),
+                "--detail".into(),
+                "读取提示后只回复 SMOKE_OK。".into(),
+                "--accept".into(),
+                "不得创建、修改或删除任何文件。".into(),
+                "-p".into(),
+                "smoke".into(),
+            ],
+        )
+        .expect("smoke task should initialize");
+        let request = AgentDispatchRequest {
+            provider: "codex".into(),
+            project: "smoke".into(),
+            reference: 1,
+            title: "stale client title".into(),
+            detail: None,
+            accept: None,
+            repository_path: repository_text,
+        };
+        let trusted = trusted_agent_request(&database, &request).expect("task should be trusted");
+        assert_eq!(trusted.title, "仅回复 SMOKE_OK，不修改文件");
+        let (launch, process) = agent::launch(&trusted).expect("Codex should accept the turn");
+        let started_at =
+            record_agent_launch(&database, "smoke", 1, &launch).expect("run should persist");
+        println!(
+            "smoke started_at={started_at} thread={} turn={}",
+            launch.external_thread_id.as_deref().unwrap_or("missing"),
+            launch.external_turn_id.as_deref().unwrap_or("missing")
+        );
+        assert!(launch.external_thread_id.is_some());
+        assert!(launch.external_turn_id.is_some());
+        assert!(process.is_some());
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        drop(process);
+        let snapshot = execute(&attempt, Some(&database_text)).expect("snapshot should reload");
+        assert_eq!(
+            snapshot["projects"][0]["tasks"][0]["agent_runs"][0]["status"],
+            "submitted"
+        );
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

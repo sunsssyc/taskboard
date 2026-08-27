@@ -1,5 +1,7 @@
 export type TaskStatus = "todo" | "active" | "waiting" | "done" | "dropped";
 export type TaskOwner = "" | "你" | "我" | "双方";
+export type AgentProvider = "codex" | "claude";
+export type AgentRunStatus = "submitted" | "opened" | "failed";
 
 export interface Repository {
   id?: number;
@@ -15,6 +17,41 @@ export interface TaskCounts {
   dropped: number;
 }
 
+export interface AgentRun {
+  id: number;
+  task_id: number;
+  provider: AgentProvider;
+  dispatch_id: string;
+  repository_path: string | null;
+  external_thread_id: string | null;
+  external_turn_id: string | null;
+  status: AgentRunStatus;
+  error: string | null;
+  started_at: string;
+  updated_at: string;
+}
+
+export interface AgentDispatchRequest {
+  provider: AgentProvider;
+  project: string;
+  reference: number;
+  title: string;
+  detail: string | null;
+  accept: string | null;
+  repositoryPath: string;
+}
+
+export interface AgentDispatchResult {
+  provider: AgentProvider;
+  dispatchId: string;
+  repositoryPath: string;
+  status: AgentRunStatus;
+  externalThreadId: string | null;
+  externalTurnId: string | null;
+  startedAt: string;
+  warning: string | null;
+}
+
 export interface BoardTask {
   ref: number;
   title: string;
@@ -26,6 +63,7 @@ export interface BoardTask {
   branch: string | null;
   pr: string | null;
   repositories: Repository[];
+  agent_runs: AgentRun[];
   blocked_by: number[];
   open_blockers: number[];
   blocks: number[];

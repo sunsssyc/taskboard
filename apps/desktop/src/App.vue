@@ -39,6 +39,7 @@ const {
   loading,
   error,
   actionError,
+  actionNotice,
   projects,
   orderedProjects,
   displayProjects,
@@ -259,6 +260,10 @@ onBeforeUnmount(() => {
 
           <div v-if="actionError" class="inline-error" role="alert">
             任务更新失败：{{ actionError }}
+          </div>
+
+          <div v-if="actionNotice" class="inline-notice" role="status">
+            {{ actionNotice }}
           </div>
 
           <div v-if="filterActive" class="active-filter-note">

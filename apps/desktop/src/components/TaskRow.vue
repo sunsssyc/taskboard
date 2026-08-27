@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { Send } from "@lucide/vue";
 import MarkdownBlock from "./MarkdownBlock.vue";
 import { useBoardStore } from "../stores/board";
 import { OWNER_OPTIONS, ownerLabel } from "../owner";
-import type { BoardTask, TaskOwner, TaskStatus } from "../types";
+import type { AgentProvider, BoardTask, TaskOwner, TaskStatus } from "../types";
 
 const props = defineProps<{ task: BoardTask; projectKey: string; query: string }>();
 const board = useBoardStore();
@@ -11,6 +12,7 @@ const expanded = ref(props.task.status === "active");
 const rootElement = ref<HTMLElement | null>(null);
 const statusMenuOpen = ref(false);
 const ownerMenuOpen = ref(false);
+const agentMenuOpen = ref(false);
 const confirmingDone = ref(false);
 
 watch(
@@ -31,9 +33,24 @@ const switchableOptions = computed(() =>
   statusOptions.filter((option) => option.value !== props.task.status),
 );
 
+const agentOptions: { value: AgentProvider; label: string; hint: string }[] = [
+  { value: "codex", label: "Codex", hint: "创建线程并立即提交" },
+  { value: "claude", label: "Claude", hint: "打开桌面端并预填" },
+];
+const dispatchRepositories = computed(() =>
+  props.task.repositories.filter(
+    (repository): repository is typeof repository & { path: string } => Boolean(repository.path),
+  ),
+);
+const latestAgentRun = computed(() => props.task.agent_runs[0] ?? null);
+const dispatching = computed(
+  () => board.dispatchingTask === `${props.projectKey}:${props.task.ref}`,
+);
+
 function closeMenus() {
   statusMenuOpen.value = false;
   ownerMenuOpen.value = false;
+  agentMenuOpen.value = false;
   confirmingDone.value = false;
 }
 
@@ -47,6 +64,13 @@ function toggleOwnerMenu() {
   const next = !ownerMenuOpen.value;
   closeMenus();
   ownerMenuOpen.value = next;
+}
+
+function toggleAgentMenu() {
+  if (dispatching.value) return;
+  const next = !agentMenuOpen.value;
+  closeMenus();
+  agentMenuOpen.value = next;
 }
 
 function chooseStatus(status: TaskStatus) {
@@ -68,13 +92,23 @@ function applyOwner(owner: TaskOwner) {
   void board.setTaskOwner(props.projectKey, props.task.ref, owner);
 }
 
+function applyDispatch(provider: AgentProvider, repositoryPath: string) {
+  closeMenus();
+  void board.dispatchTask(
+    props.projectKey,
+    props.task,
+    provider,
+    repositoryPath,
+  );
+}
+
 function onDocumentPointerDown(event: MouseEvent) {
   if (!(event.target instanceof Node) || !rootElement.value?.contains(event.target)) {
     closeMenus();
   }
 }
 
-watch(() => statusMenuOpen.value || ownerMenuOpen.value, (open) => {
+watch(() => statusMenuOpen.value || ownerMenuOpen.value || agentMenuOpen.value, (open) => {
   if (open) document.addEventListener("mousedown", onDocumentPointerDown);
   else document.removeEventListener("mousedown", onDocumentPointerDown);
 });
@@ -100,6 +134,7 @@ const hasDetails = computed(
   () =>
     Boolean(props.task.detail || props.task.accept || props.task.branch || props.task.pr) ||
     props.task.repositories.length > 0 ||
+    props.task.agent_runs.length > 0 ||
     props.task.open_blockers.length > 0,
 );
 
@@ -113,13 +148,29 @@ function formatTime(value: string | null): string {
     hour12: false,
   }).format(new Date(value));
 }
+
+
+function agentProviderLabel(provider: AgentProvider): string {
+  return provider === "codex" ? "Codex" : "Claude";
+}
+
+function agentRunLabel(): string {
+  if (!latestAgentRun.value) return "";
+  if (latestAgentRun.value.status === "submitted") return "已提交";
+  if (latestAgentRun.value.status === "opened") return "待确认发送";
+  return "失败";
+}
+
+function shortIdentifier(value: string): string {
+  return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-5)}` : value;
+}
 </script>
 
 <template>
   <article
     ref="rootElement"
     class="task-row"
-    :class="[`status-${task.status}`, { expanded }]"
+    :class="[`status-${task.status}`, { expanded, 'menu-open': statusMenuOpen || ownerMenuOpen || agentMenuOpen }]"
     :data-ref="task.ref"
   >
     <div class="task-row-head">
@@ -164,6 +215,44 @@ function formatTime(value: string | null): string {
             </span>
             {{ option.label }}
           </button>
+        </div>
+      </div>
+
+      <div class="task-agent-control">
+        <button
+          type="button"
+          class="agent-dispatch-button"
+          :class="{ busy: dispatching }"
+          :disabled="dispatching"
+          aria-haspopup="menu"
+          :aria-expanded="agentMenuOpen"
+          title="派发给本地桌面 Agent"
+          @click="toggleAgentMenu"
+        >
+          <Send :size="13" :stroke-width="1.8" aria-hidden="true" />
+          <span>{{ dispatching ? "派发中" : "派发" }}</span>
+        </button>
+        <div v-if="agentMenuOpen" class="agent-menu" role="menu" aria-label="派发给桌面 Agent">
+          <div class="agent-menu-heading">选择 Agent 与工作目录</div>
+          <template v-if="dispatchRepositories.length">
+            <template v-for="agent in agentOptions" :key="agent.value">
+              <button
+                v-for="repository in dispatchRepositories"
+                :key="`${agent.value}:${repository.path}`"
+                type="button"
+                role="menuitem"
+                class="agent-menu-item"
+                @click="applyDispatch(agent.value, repository.path)"
+              >
+                <span class="agent-menu-provider">{{ agent.label }}</span>
+                <span class="agent-menu-meta">
+                  {{ agent.hint }}
+                  <small>{{ repository.name }}</small>
+                </span>
+              </button>
+            </template>
+          </template>
+          <div v-else class="agent-menu-empty">任务没有可用的本地仓库路径，无法派发。</div>
         </div>
       </div>
 
@@ -217,6 +306,16 @@ function formatTime(value: string | null): string {
       </div>
 
       <dl class="task-facts">
+        <div v-if="latestAgentRun">
+          <dt>Agent</dt>
+          <dd class="agent-run-fact">
+            <strong>{{ agentProviderLabel(latestAgentRun.provider) }} {{ agentRunLabel() }}</strong>
+            <code>
+              {{ shortIdentifier(latestAgentRun.external_thread_id || latestAgentRun.dispatch_id) }}
+            </code>
+            <span>{{ formatTime(latestAgentRun.started_at) }}</span>
+          </dd>
+        </div>
         <div v-if="task.repositories.length">
           <dt>仓库</dt>
           <dd>{{ task.repositories.map((repository) => repository.name).join(" · ") }}</dd>

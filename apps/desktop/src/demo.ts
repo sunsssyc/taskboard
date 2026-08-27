@@ -20,6 +20,7 @@ function task(
     branch: null,
     pr: null,
     repositories: [{ name: "taskboard", path: "/Users/demo/taskboard" }],
+    agent_runs: [],
     blocked_by: [],
     open_blockers: [],
     blocks: [],

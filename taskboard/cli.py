@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -447,6 +448,23 @@ def cmd_edit(store: Store, args) -> int:
     return 0
 
 
+def cmd_agent_run(store: Store, args) -> int:
+    project = resolve_project(store, args.project)
+    run = store.record_agent_run(
+        project,
+        args.ref,
+        provider=args.provider,
+        dispatch_id=args.dispatch_id,
+        repository_path=args.repository,
+        status=args.status,
+        external_thread_id=args.thread_id,
+        external_turn_id=args.turn_id,
+        error=args.error,
+    )
+    print(json.dumps(dict(run), ensure_ascii=False))
+    return 0
+
+
 def cmd_rm(store: Store, args) -> int:
     project = resolve_project(store, args.project)
     for ref in args.refs:
@@ -580,6 +598,8 @@ def cmd_export(store: Store, args) -> int:
             for task in project.get('tasks', []):
                 for repository in task.get('repositories', []):
                     repository['path'] = None
+                for run in task.get('agent_runs', []):
+                    run['repository_path'] = None
     if args.json:
         output = render_json(snapshot)
     else:
@@ -726,6 +746,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument('--no-gate', action='store_true')
     add_project_flag(sp)
     sp.set_defaults(func=cmd_edit)
+
+    sp = sub.add_parser('agent-run', help='记录桌面 Agent 派发结果')
+    sp.add_argument('ref', type=int)
+    sp.add_argument('--provider', required=True, choices=('codex', 'claude'))
+    sp.add_argument('--dispatch-id', required=True)
+    sp.add_argument('--repository', required=True)
+    sp.add_argument('--status', required=True, choices=('submitted', 'opened', 'failed'))
+    sp.add_argument('--thread-id')
+    sp.add_argument('--turn-id')
+    sp.add_argument('--error')
+    add_project_flag(sp)
+    sp.set_defaults(func=cmd_agent_run)
 
     sp = sub.add_parser('rm', help='删任务')
     sp.add_argument('refs', type=int, nargs='+')

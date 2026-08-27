@@ -18,6 +18,8 @@ STATUSES = ('todo', 'active', 'waiting', 'done', 'dropped')
 OPEN_STATUSES = ('todo', 'active', 'waiting')
 ACTIONABLE_STATUSES = ('todo', 'active')
 NOTE_KINDS = ('finding', 'risk', 'link')
+AGENT_PROVIDERS = ('codex', 'claude')
+AGENT_RUN_STATUSES = ('submitted', 'opened', 'failed')
 DEFAULT_STALE_DAYS = 3
 MARKDOWN_CODE_RE = re.compile(r'```.*?```|`[^`\n]*`', re.DOTALL)
 LITERAL_PARAGRAPH_BREAK_RE = re.compile(r'(?<!\\)\\n(?<!\\)\\n')
@@ -130,6 +132,19 @@ CREATE TABLE IF NOT EXISTS task_repositories (
     repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
     PRIMARY KEY (task_id, repository_id)
 );
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id            INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    provider           TEXT NOT NULL,
+    dispatch_id        TEXT NOT NULL UNIQUE,
+    repository_path    TEXT NOT NULL,
+    external_thread_id TEXT,
+    external_turn_id   TEXT,
+    status             TEXT NOT NULL,
+    error              TEXT,
+    started_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS deps (
     task_id       INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     blocked_by_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -158,6 +173,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project, ref);
 CREATE INDEX IF NOT EXISTS idx_project_repositories_repo ON project_repositories(repository_id);
 CREATE INDEX IF NOT EXISTS idx_task_repositories_repo ON task_repositories(repository_id);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project, kind);
 CREATE INDEX IF NOT EXISTS idx_events_at ON events(at DESC);
 """
@@ -638,6 +654,63 @@ class Store:
             self.conn.commit()
         return self.get_task(project, ref)
 
+    # ── 桌面 Agent 派发 ─────────────────────────────────────────────────
+    def record_agent_run(
+        self,
+        project: str,
+        ref: int,
+        provider: str,
+        dispatch_id: str,
+        repository_path: str,
+        status: str,
+        external_thread_id: str | None = None,
+        external_turn_id: str | None = None,
+        error: str | None = None,
+    ) -> sqlite3.Row:
+        """记录一次公开协议派发；不读取 Codex/Claude 的私有状态。"""
+        if provider not in AGENT_PROVIDERS:
+            raise BoardError(f'Agent 只能是 {"/".join(AGENT_PROVIDERS)},收到 {provider}')
+        if status not in AGENT_RUN_STATUSES:
+            raise BoardError(f'Agent 派发状态只能是 {"/".join(AGENT_RUN_STATUSES)},收到 {status}')
+        dispatch_id = dispatch_id.strip()
+        if not dispatch_id or len(dispatch_id) > 160 or '\x00' in dispatch_id:
+            raise BoardError('Agent 派发 ID 无效')
+        repository_path = str(Path(repository_path).expanduser().resolve())
+        task = self.get_task(project, ref)
+        allowed_paths = {row['path'] for row in self.task_repositories(project, ref)}
+        if repository_path not in allowed_paths:
+            raise BoardError(f'仓库 {repository_path} 未关联到 {project} #{ref}')
+        stamp = now_iso()
+        try:
+            cursor = self.conn.execute(
+                'INSERT INTO agent_runs '
+                '(task_id, provider, dispatch_id, repository_path, external_thread_id, '
+                'external_turn_id, status, error, started_at, updated_at) '
+                'VALUES (?,?,?,?,?,?,?,?,?,?)',
+                (
+                    task['id'], provider, dispatch_id, repository_path,
+                    external_thread_id, external_turn_id, status, error, stamp, stamp,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise BoardError(f'Agent 派发 ID 已存在：{dispatch_id}') from exc
+        self.log_event(
+            'agent_dispatched', project=project, task_ref=ref, provider=provider,
+            dispatch_id=dispatch_id, external_thread_id=external_thread_id,
+            external_turn_id=external_turn_id, status=status,
+        )
+        self.conn.commit()
+        return self.conn.execute(
+            'SELECT * FROM agent_runs WHERE id = ?', (cursor.lastrowid,),
+        ).fetchone()
+
+    def agent_runs(self, project: str, ref: int) -> list[sqlite3.Row]:
+        task = self.get_task(project, ref)
+        return list(self.conn.execute(
+            'SELECT * FROM agent_runs WHERE task_id = ? ORDER BY id DESC',
+            (task['id'],),
+        ))
+
     def delete_task(self, project: str, ref: int) -> None:
         task = self.get_task(project, ref)
         self.conn.execute('DELETE FROM tasks WHERE id = ?', (task['id'],))
@@ -911,6 +984,7 @@ class Store:
                     'repositories': [
                         dict(row) for row in self.task_repositories(key, task['ref'])
                     ],
+                    'agent_runs': [dict(row) for row in self.agent_runs(key, task['ref'])],
                     'blocked_by': blockers,
                     'open_blockers': open_blockers,
                     'blocks': sorted(

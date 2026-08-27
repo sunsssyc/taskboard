@@ -177,6 +177,32 @@ def test_cli_export_html_and_json(db, tmp_path, capsys):
     assert str(repo) in local_html
 
 
+def test_cli_agent_run_records_ids_and_scrubs_repository_from_public_export(
+    db, tmp_path, capsys,
+):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    run(db, 'init', 'demo', '--name', 'Agent 派发', '--repo', str(repo))
+    run(db, 'add', '交给 Codex', '-p', 'demo')
+    capsys.readouterr()
+
+    assert run(
+        db, 'agent-run', '1', '-p', 'demo', '--provider', 'codex',
+        '--dispatch-id', 'codex-cli-test', '--repository', str(repo),
+        '--status', 'submitted', '--thread-id', 'thread-cli', '--turn-id', 'turn-cli',
+    ) == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result['external_thread_id'] == 'thread-cli'
+
+    exported = tmp_path / 'agent.json'
+    run(db, 'export', '--json', '--out', str(exported))
+    agent_run = json.loads(exported.read_text(encoding='utf-8'))['projects'][0]['tasks'][0][
+        'agent_runs'
+    ][0]
+    assert agent_run['provider'] == 'codex'
+    assert agent_run['repository_path'] is None
+
+
 def test_render_escapes_html(tmp_path):
     store = Store(tmp_path / 'board.db')
     store.create_project('x', '<script>alert(1)</script>')

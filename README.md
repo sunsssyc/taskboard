@@ -239,7 +239,9 @@ Rust command 调用 `board export --json`，保留现有 Python CLI、SQLite 数
 实现；当前已迁移成熟看板的全局统计、搜索、状态/负责人筛选、需求导航、任务路径与结论区，
 需求置顶和拖动排序与 Swift 版共享 `*.view.json`，结论按主题使用多 Sheet 切换；点击状态
 胶囊可切换 待办/进行中/等人工/完成（与 `board serve` 网页同一白名单，映射到 CLI 子命令
-执行，完成需确认验收条件），其余写入仍走 CLI。
+执行，完成需确认验收条件）。负责人分配与 Agent 派发是两个独立动作：Codex 经官方
+app-server 创建并提交线程，Claude 经官方深链预填桌面 Code 会话；看板保存派发标识和公开
+线程/运行 ID，不读取 Agent 私有数据库。其余写入仍走 CLI。
 
 ```bash
 cd apps/desktop

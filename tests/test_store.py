@@ -248,6 +248,39 @@ def test_events_are_recorded(store):
     assert 'task_added' in actions
 
 
+def test_agent_run_is_persisted_on_task_without_private_app_state(store, tmp_path):
+    task = store.add_task('demo', '派发任务')
+    repository = str((tmp_path / 'repo').resolve())
+
+    run = store.record_agent_run(
+        'demo', task['ref'], provider='codex', dispatch_id='codex-test-1',
+        repository_path=repository, status='submitted',
+        external_thread_id='thread-123', external_turn_id='turn-456',
+    )
+
+    assert run['provider'] == 'codex'
+    assert run['external_thread_id'] == 'thread-123'
+    snapshot_task = store.snapshot()['projects'][0]['tasks'][0]
+    assert snapshot_task['agent_runs'][0]['dispatch_id'] == 'codex-test-1'
+    assert snapshot_task['agent_runs'][0]['repository_path'] == repository
+    assert any(event['action'] == 'agent_dispatched' for event in store.events(project='demo'))
+
+
+def test_agent_run_rejects_unknown_provider_and_unrelated_repository(store, tmp_path):
+    task = store.add_task('demo', '派发边界')
+    repository = str((tmp_path / 'repo').resolve())
+    with pytest.raises(BoardError, match='Agent 只能是'):
+        store.record_agent_run(
+            'demo', task['ref'], provider='other', dispatch_id='bad-provider',
+            repository_path=repository, status='submitted',
+        )
+    with pytest.raises(BoardError, match='未关联'):
+        store.record_agent_run(
+            'demo', task['ref'], provider='codex', dispatch_id='bad-repo',
+            repository_path=str(tmp_path / 'other'), status='submitted',
+        )
+
+
 def test_snapshot_derives_first_started_at_from_event_stream(store):
     task = store.add_task('demo', '生命周期')
     initial = store.snapshot()['projects'][0]['tasks'][0]

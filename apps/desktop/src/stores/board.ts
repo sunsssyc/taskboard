@@ -1,7 +1,14 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
-import { loadBoardSnapshot, saveBoardViewPrefs, saveTaskOwner, saveTaskStatus } from "../board";
+import {
+  dispatchTaskAgent,
+  loadBoardSnapshot,
+  saveBoardViewPrefs,
+  saveTaskOwner,
+  saveTaskStatus,
+} from "../board";
 import type {
+  AgentProvider,
   BoardNote,
   BoardProject,
   BoardSnapshot,
@@ -92,6 +99,8 @@ export const useBoardStore = defineStore("board", () => {
   const viewPrefs = ref<ViewPrefs>({ order: [], pinned: [] });
   const preferenceError = ref("");
   const actionError = ref("");
+  const actionNotice = ref("");
+  const dispatchingTask = ref("");
   const source = ref("");
   const loading = ref(false);
   const error = ref("");
@@ -246,6 +255,46 @@ export const useBoardStore = defineStore("board", () => {
     }
   }
 
+  async function dispatchTask(
+    projectKey: string,
+    task: BoardTask,
+    provider: AgentProvider,
+    repositoryPath: string,
+  ) {
+    const key = `${projectKey}:${task.ref}`;
+    actionError.value = "";
+    actionNotice.value = "";
+    dispatchingTask.value = key;
+    try {
+      const result = await dispatchTaskAgent({
+        provider,
+        project: projectKey,
+        reference: task.ref,
+        title: task.title,
+        detail: task.detail,
+        accept: task.accept,
+        repositoryPath,
+      });
+      if (result.warning?.startsWith("网页演示")) {
+        const providerLabel = provider === "claude" ? "Claude" : "Codex";
+        actionNotice.value = `网页演示：已模拟将 #${task.ref} 派发给 ${providerLabel}，未实际启动桌面 Agent。`;
+      } else if (provider === "claude") {
+        actionNotice.value = `Claude 已打开 #${task.ref}；请确认工作目录后发送预填任务。`;
+      } else {
+        const suffix = result.externalThreadId ? `（线程 ${result.externalThreadId.slice(0, 8)}…）` : "";
+        actionNotice.value = `Codex 已接收 #${task.ref}${suffix}。`;
+      }
+      if (result.warning && !result.warning.startsWith("网页演示")) {
+        actionNotice.value += ` ${result.warning}`;
+      }
+      await load();
+    } catch (reason) {
+      actionError.value = reason instanceof Error ? reason.message : String(reason);
+    } finally {
+      if (dispatchingTask.value === key) dispatchingTask.value = "";
+    }
+  }
+
   async function load() {
     loading.value = true;
     error.value = "";
@@ -277,6 +326,8 @@ export const useBoardStore = defineStore("board", () => {
     viewPrefs,
     preferenceError,
     actionError,
+    actionNotice,
+    dispatchingTask,
     source,
     loading,
     error,
@@ -301,6 +352,7 @@ export const useBoardStore = defineStore("board", () => {
     reorderProject,
     setTaskOwner,
     setTaskStatus,
+    dispatchTask,
     load,
   };
 });

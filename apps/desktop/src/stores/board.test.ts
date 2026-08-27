@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { demoSnapshot } from "../demo";
-import { loadBoardSnapshot, saveTaskOwner, saveTaskStatus } from "../board";
+import { dispatchTaskAgent, loadBoardSnapshot, saveTaskOwner, saveTaskStatus } from "../board";
 
 vi.mock("../board", () => ({
   loadBoardSnapshot: vi.fn(async () => ({
@@ -10,6 +10,16 @@ vi.mock("../board", () => ({
     viewPrefs: { order: [], pinned: [] },
   })),
   saveBoardViewPrefs: vi.fn(async (prefs: unknown) => prefs),
+  dispatchTaskAgent: vi.fn(async () => ({
+    provider: "codex",
+    dispatchId: "codex-test",
+    repositoryPath: "/Users/demo/taskboard",
+    status: "submitted",
+    externalThreadId: "thread-test",
+    externalTurnId: "turn-test",
+    startedAt: "2026-08-27T00:00:00+00:00",
+    warning: null,
+  })),
   saveTaskOwner: vi.fn(async () => {}),
   saveTaskStatus: vi.fn(async () => {}),
 }));
@@ -65,6 +75,40 @@ describe("task owner switch", () => {
     const board = useBoardStore();
     await board.setTaskOwner("taskboard", 32, "");
     expect(saveTaskOwner).toHaveBeenCalledWith("taskboard", 32, "");
+  });
+});
+
+describe("task Agent dispatch", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
+
+  it("keeps assignment and actual dispatch as separate actions", async () => {
+    const board = useBoardStore();
+    const task = demoSnapshot.projects[0].tasks[0];
+    await board.dispatchTask("taskboard", task, "codex", "/Users/demo/taskboard");
+
+    expect(dispatchTaskAgent).toHaveBeenCalledWith(expect.objectContaining({
+      provider: "codex",
+      project: "taskboard",
+      reference: task.ref,
+      repositoryPath: "/Users/demo/taskboard",
+    }));
+    expect(saveTaskOwner).not.toHaveBeenCalled();
+    expect(board.actionNotice).toContain("Codex 已接收");
+    expect(loadBoardSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces dispatch failures and clears busy state", async () => {
+    vi.mocked(dispatchTaskAgent).mockRejectedValueOnce(new Error("未安装 Claude 桌面应用"));
+    const board = useBoardStore();
+    const task = demoSnapshot.projects[0].tasks[0];
+    await board.dispatchTask("taskboard", task, "claude", "/Users/demo/taskboard");
+
+    expect(board.actionError).toContain("未安装 Claude");
+    expect(board.dispatchingTask).toBe("");
+    expect(loadBoardSnapshot).not.toHaveBeenCalled();
   });
 });
 
