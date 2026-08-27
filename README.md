@@ -105,14 +105,15 @@ board init website-refresh --name "网站改版" --summary "重做官网并完�
   --repo ../website_backend --repo ../website_frontend
 
 # 加执行任务,明确本任务涉及需求仓库中的哪几个
-board add "确认需求" --owner 你 --repo website_backend --repo website_frontend
-board add "实现页面" --owner 我 --blocked-by 1 --repo website_frontend
-board add "发布上线" --gate --blocked-by 2 --repo website_backend --repo website_frontend
+board add "确认需求" --owner 你 --priority P1 --repo website_backend --repo website_frontend
+board add "实现页面" --owner 我 --priority P1 --blocked-by 1 --repo website_frontend
+board add "发布上线" --gate --priority P0 --blocked-by 2 --repo website_backend --repo website_frontend
 
 # 推进
 board start 1
 board wait 1                                  # 卡在人工/外部动作上(服务器执行、等发版)
 board done 1                                  # 提示解锁了谁、打印验收条件、记录完成时 HEAD
+board edit 2 --priority P0                    # 目标变化后动态提高优先级
 
 # 看
 board brief               # 交接摘要:新会话读这一段就能接上
@@ -127,6 +128,9 @@ board log                 # 变更历史
 
 Agent 初始化需求或给多仓库需求新增正式任务时，应先列出关联仓库并让用户确认；当前请求已明确
 仓库集合时可直接执行。CLI 在多仓库需求里省略 `board add --repo` 会拒绝创建，避免静默误挂。
+每个新任务都带 P0–P3 优先级（P0 最高，兼容旧调用时默认 P2）；Agent 创建正式任务时应显式
+传 `--priority`。优先级可随依赖、风险和目标变化通过 `board edit --priority` 调整，`board next`
+和桌面/网页看板都会按优先级排列可开工项，主区先展示前三项，其余折叠。
 
 `todo`(没开工)、`active`(我在做)、`waiting`(等人工)三态分开:`waiting` 不算
 "可开工",因为它等的是人不是我;`board next` 会把它单列成"等人工"。

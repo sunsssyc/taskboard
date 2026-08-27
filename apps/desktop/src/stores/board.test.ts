@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { demoSnapshot } from "../demo";
-import { dispatchTaskAgent, loadBoardSnapshot, saveTaskOwner, saveTaskStatus } from "../board";
+import {
+  dispatchTaskAgent,
+  loadBoardSnapshot,
+  saveTaskOwner,
+  saveTaskPriority,
+  saveTaskStatus,
+} from "../board";
 
 vi.mock("../board", () => ({
   loadBoardSnapshot: vi.fn(async () => ({
@@ -21,6 +27,7 @@ vi.mock("../board", () => ({
     warning: null,
   })),
   saveTaskOwner: vi.fn(async () => {}),
+  saveTaskPriority: vi.fn(async () => {}),
   saveTaskStatus: vi.fn(async () => {}),
 }));
 import {
@@ -78,6 +85,20 @@ describe("task owner switch", () => {
   });
 });
 
+describe("task priority switch", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
+
+  it("persists the new priority through the CLI bridge and reloads", async () => {
+    const board = useBoardStore();
+    await board.setTaskPriority("taskboard", 24, 0);
+    expect(saveTaskPriority).toHaveBeenCalledWith("taskboard", 24, 0);
+    expect(loadBoardSnapshot).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("task Agent dispatch", () => {
   beforeEach(() => {
     setActivePinia(createPinia());
@@ -119,6 +140,7 @@ describe("board search", () => {
     const task = demoSnapshot.projects[0].tasks[0];
     expect(taskMatches(task, "tauri")).toBe(true);
     expect(taskMatches(task, "taskboard")).toBe(true);
+    expect(taskMatches(task, "P0")).toBe(true);
     expect(taskMatches(task, "不存在")).toBe(false);
   });
 

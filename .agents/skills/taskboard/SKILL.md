@@ -67,18 +67,33 @@ board init registration-calibration --name "注册风控模型校准" \
 board start <ref>
 board wait <ref>       # 等人工或外部动作，不等同于依赖阻塞
 board done <ref>       # 对照验收条件，记录当前 Git HEAD，提示新解锁任务
-board add "动作标题" --detail "做什么以及为什么" --owner 我|你|双方
+board add "动作标题" --detail "做什么以及为什么" --owner 我|你|双方 --priority P0|P1|P2|P3
 board dep <ref> --on <ref>
 ```
 
 标题写成动作，详情说明范围和原因。`--gate` 用于会阻塞大片后续工作的关键节点，
 `--accept` 写可检查的验收条件，`--branch` 和 `--pr` 记录代码坐标。
 
+### 创建任务时必须明确优先级
+
+每个正式任务节点创建时都要显式传 `--priority`，不要依赖兼容旧调用的 P2 默认值：
+
+- `P0`：当前最高优先级，紧急故障、硬阻塞或必须立即处理的事项；
+- `P1`：本轮应优先完成的核心路径；
+- `P2`：常规计划内任务；
+- `P3`：低优先级优化或可延后事项。
+
+优先级是动态的执行判断，不是创建时的永久标签。依赖解除、风险暴露、用户目标或时间窗口变化时，
+应使用 `board edit <ref> -p <key> --priority P0|P1|P2|P3` 合理调整，并在任务详情或 finding
+中记录会影响后续判断的原因。`board next` 与界面中的“可开工”任务按 P0 到 P3 排序；界面先展示
+最高的三项，其余默认折叠，避免低优先级任务挤占当前注意力。
+
 创建正式任务时同时确定它涉及需求仓库集合中的哪几个仓库。需求只有一个仓库时可自动继承；
 需求涉及多个仓库时，如果当前请求没有明确任务范围，先向用户列出仓库并确认，再重复传 `--repo`：
 
 ```bash
 board add "发布三端采样契约" -p registration-calibration \
+  --priority P1 \
   --repo coinex_backend --repo coinex_anti_fraud_service --repo coinex_admin_frontend
 ```
 

@@ -244,6 +244,9 @@ def make_handler(db_path: str, title: str, include_archived: bool, dev: bool = F
                     detail = self._optional_text(data, 'detail')
                     accept = self._optional_text(data, 'accept', 2_000)
                     owner = self._optional_text(data, 'owner', 120)
+                    priority = data.get('priority', store_module.DEFAULT_PRIORITY)
+                    if not isinstance(priority, int) or isinstance(priority, bool):
+                        raise store_module.BoardError('priority 必须是 P0-P3 对应的整数 0-3')
                     repositories = self._text_list(data, 'repositories')
                     if store.project_repositories(project) and not repositories:
                         raise store_module.BoardError('请先确认并选择本任务关联仓库')
@@ -251,6 +254,7 @@ def make_handler(db_path: str, title: str, include_archived: bool, dev: bool = F
                     task = store.add_task(
                         project, title_value, detail=detail,
                         owner=owner, accept=accept, repositories=repositories,
+                        priority=priority,
                     )
                     self._json({'ok': True, 'project': project, 'ref': task['ref']}, 201)
                     return

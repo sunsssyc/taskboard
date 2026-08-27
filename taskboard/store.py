@@ -20,6 +20,8 @@ ACTIONABLE_STATUSES = ('todo', 'active')
 NOTE_KINDS = ('finding', 'risk', 'link')
 AGENT_PROVIDERS = ('codex', 'claude')
 AGENT_RUN_STATUSES = ('submitted', 'opened', 'failed')
+PRIORITIES = (0, 1, 2, 3)
+DEFAULT_PRIORITY = 2
 DEFAULT_STALE_DAYS = 3
 MARKDOWN_CODE_RE = re.compile(r'```.*?```|`[^`\n]*`', re.DOTALL)
 LITERAL_PARAGRAPH_BREAK_RE = re.compile(r'(?<!\\)\\n(?<!\\)\\n')
@@ -119,6 +121,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     detail      TEXT,
     accept      TEXT,
     status      TEXT NOT NULL DEFAULT 'todo',
+    priority    INTEGER NOT NULL DEFAULT 2,
     owner       TEXT,
     gate        INTEGER NOT NULL DEFAULT 0,
     branch      TEXT,
@@ -209,7 +212,10 @@ class Store:
         self._add_columns('notes', {
             'category': 'TEXT', 'superseded_by': 'INTEGER', 'superseded_at': 'TEXT',
         })
-        self._add_columns('tasks', {'accept': 'TEXT', 'branch': 'TEXT', 'pr': 'TEXT'})
+        self._add_columns('tasks', {
+            'accept': 'TEXT', 'branch': 'TEXT', 'pr': 'TEXT',
+            'priority': f'INTEGER NOT NULL DEFAULT {DEFAULT_PRIORITY}',
+        })
         self._add_columns('projects', {'artifact_url': 'TEXT'})
         # 兼容旧库的单 repo 字段:先把它登记为需求关联仓库；既有任务无法还原
         # 更细的历史归属，安全地继承这一个旧仓库。
@@ -515,8 +521,11 @@ class Store:
                  owner: str | None = None, gate: bool = False,
                  blocked_by: list[int] | None = None, accept: str | None = None,
                  branch: str | None = None, pr: str | None = None,
-                 repositories: list[str] | None = None) -> sqlite3.Row:
+                 repositories: list[str] | None = None,
+                 priority: int = DEFAULT_PRIORITY) -> sqlite3.Row:
         self.get_project(project)
+        if not isinstance(priority, int) or isinstance(priority, bool) or priority not in PRIORITIES:
+            raise BoardError('优先级只能是 P0/P1/P2/P3（P0 最高）')
         # ref 是"读 MAX+1 再插":必须在写锁下完成,否则两个进程会算出同一个号。
         # BEGIN IMMEDIATE 在读之前就拿写锁,配合 UNIQUE(project, ref) 双保险。
         in_transaction = self.conn.in_transaction
@@ -528,10 +537,11 @@ class Store:
             ).fetchone()[0])
             stamp = now_iso()
             cursor = self.conn.execute(
-                'INSERT INTO tasks (project, ref, title, detail, accept, status, owner, gate,'
-                ' branch, pr, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',
-                (project, next_ref, title, detail, accept, 'todo', owner, int(bool(gate)),
-                 branch, pr, stamp, stamp),
+                'INSERT INTO tasks (project, ref, title, detail, accept, status, priority,'
+                ' owner, gate, branch, pr, created_at, updated_at) '
+                'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
+                (project, next_ref, title, detail, accept, 'todo', priority, owner,
+                 int(bool(gate)), branch, pr, stamp, stamp),
             )
             task_id = cursor.lastrowid
             selected_repositories = self._resolve_task_repositories(project, repositories)
@@ -544,6 +554,7 @@ class Store:
                 self._add_dep(task_id, self.get_task(project, blocker_ref)['id'])
             self.log_event(
                 'task_added', project=project, task_ref=next_ref, title=title,
+                priority=priority,
                 repositories=[repository['name'] for repository in selected_repositories],
             )
             self.conn.commit()
@@ -639,11 +650,15 @@ class Store:
 
     def update_task(self, project: str, ref: int, **fields) -> sqlite3.Row:
         task = self.get_task(project, ref)
-        allowed = {'title', 'detail', 'owner', 'gate', 'accept', 'branch', 'pr'}
+        allowed = {'title', 'detail', 'owner', 'gate', 'accept', 'branch', 'pr', 'priority'}
         sets, args = [], []
         for field, value in fields.items():
             if field not in allowed or value is None:
                 continue
+            if field == 'priority' and (
+                not isinstance(value, int) or isinstance(value, bool) or value not in PRIORITIES
+            ):
+                raise BoardError('优先级只能是 P0/P1/P2/P3（P0 最高）')
             sets.append(f'{field} = ?')
             args.append(int(bool(value)) if field == 'gate' else value)
         if sets:
@@ -977,6 +992,7 @@ class Store:
                     'detail': task['detail'],
                     'accept': task['accept'],
                     'status': task['status'],
+                    'priority': task['priority'],
                     'owner': task['owner'],
                     'gate': bool(task['gate']),
                     'branch': task['branch'],

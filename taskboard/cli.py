@@ -69,12 +69,21 @@ def _refs(value: str | None) -> list[int]:
     return [int(part) for part in str(value).replace(',', ' ').split()]
 
 
+def _priority(value: str) -> int:
+    normalized = value.strip().upper()
+    if normalized.startswith('P'):
+        normalized = normalized[1:]
+    if normalized not in {'0', '1', '2', '3'}:
+        raise argparse.ArgumentTypeError('优先级只能是 P0/P1/P2/P3（P0 最高）')
+    return int(normalized)
+
+
 # ── 输出 ────────────────────────────────────────────────────────────────
 
 def print_task_line(task: dict, indent: str = '') -> None:
     mark = paint(MARK[task['status']], COLOR[task['status']])
     ref = paint(f'#{task["ref"]:<3}', BOLD if task['status'] == 'active' else DIM)
-    bits = []
+    bits = [f'P{task["priority"]}']
     if task['owner']:
         bits.append(f'@{task["owner"]}')
     if task['gate'] and task['status'] != 'done':
@@ -93,6 +102,11 @@ def print_task_line(task: dict, indent: str = '') -> None:
         bits.append(paint('可开工', CYAN))
     suffix = f'  {paint(" · ".join(bits), DIM)}' if bits else ''
     print(f'{indent}{mark} {ref} {task["title"]}{suffix}')
+
+
+def _priority_key(task: dict) -> tuple[int, int, int]:
+    status_rank = 0 if task['status'] == 'active' else 1
+    return task['priority'], status_rank, task['ref']
 
 
 def cmd_init(store: Store, args) -> int:
@@ -166,7 +180,7 @@ def cmd_add(store: Store, args) -> int:
         project, args.title, detail=args.detail, owner=args.owner,
         gate=args.gate, blocked_by=_refs(args.blocked_by),
         accept=args.accept, branch=args.branch, pr=args.pr,
-        repositories=args.repo,
+        repositories=args.repo, priority=args.priority,
     )
     print(f'{project} #{task["ref"]} {task["title"]}')
     return 0
@@ -211,7 +225,9 @@ def cmd_next(store: Store, args) -> int:
         projects = [p for p in projects if p['key'] == store.get_project(args.project)['key']]
     found = False
     for project in projects:
-        ready = [t for t in project['tasks'] if t['actionable']]
+        ready = sorted(
+            (t for t in project['tasks'] if t['actionable']), key=_priority_key,
+        )
         if args.owner:
             ready = [t for t in ready if t['owner'] == args.owner]
         waiting = [t for t in project['tasks'] if t['status'] == 'waiting']
@@ -253,8 +269,13 @@ def cmd_brief(store: Store, args) -> int:
             line += f' · 闸门 #{", #".join(str(g) for g in project["gates"])}'
         print(line)
 
-        active = [t for t in project['tasks'] if t['status'] == 'active']
-        ready = [t for t in project['tasks'] if t['actionable'] and t['status'] == 'todo']
+        active = sorted(
+            (t for t in project['tasks'] if t['status'] == 'active'), key=_priority_key,
+        )
+        ready = sorted(
+            (t for t in project['tasks'] if t['actionable'] and t['status'] == 'todo'),
+            key=_priority_key,
+        )
         waiting = [t for t in project['tasks'] if t['status'] == 'waiting']
         for label, items in (('进行中', active), ('可开工', ready), ('等人工', waiting)):
             if not items:
@@ -383,6 +404,7 @@ def cmd_show(store: Store, args) -> int:
     ref_label = paint('#{}'.format(task['ref']), BOLD)
     print(f'{ref_label} {task["title"]}')
     print(paint(f'  状态 {STATUS_LABEL[task["status"]]}'
+                + f' · 优先级 P{task["priority"]}'
                 + (f' · 负责 {task["owner"]}' if task['owner'] else '')
                 + (' · 闸门' if task['gate'] else ''), DIM))
     if task['repositories']:
@@ -438,7 +460,7 @@ def cmd_edit(store: Store, args) -> int:
     gate = True if args.gate else (False if args.no_gate else None)
     task = store.update_task(
         project, args.ref, title=args.title, detail=args.detail, owner=args.owner, gate=gate,
-        accept=args.accept, branch=args.branch, pr=args.pr,
+        accept=args.accept, branch=args.branch, pr=args.pr, priority=args.priority,
     )
     if args.repo is not None:
         if store.project_repositories(project) and not args.repo:
@@ -657,6 +679,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument('title')
     sp.add_argument('--detail')
     sp.add_argument('--owner')
+    sp.add_argument('--priority', type=_priority, default=2,
+                    metavar='P0-P3', help='任务优先级（P0 最高，默认 P2）')
     sp.add_argument('--accept', help='验收条件,done 时会打印出来对照')
     sp.add_argument('--branch', help='关联分支')
     sp.add_argument('--pr', help='关联 PR')
@@ -738,6 +762,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument('--title')
     sp.add_argument('--detail')
     sp.add_argument('--owner')
+    sp.add_argument('--priority', type=_priority, metavar='P0-P3',
+                    help='调整任务优先级（P0 最高）')
     sp.add_argument('--accept')
     sp.add_argument('--branch')
     sp.add_argument('--pr')

@@ -1,5 +1,6 @@
 export type TaskStatus = "todo" | "active" | "waiting" | "done" | "dropped";
 export type TaskOwner = "" | "你" | "我" | "双方";
+export type TaskPriority = 0 | 1 | 2 | 3;
 export type AgentProvider = "codex" | "claude";
 export type AgentRunStatus = "submitted" | "opened" | "failed";
 
@@ -58,6 +59,7 @@ export interface BoardTask {
   detail: string | null;
   accept: string | null;
   status: TaskStatus;
+  priority: TaskPriority;
   owner: string | null;
   gate: boolean;
   branch: string | null;

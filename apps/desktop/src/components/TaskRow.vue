@@ -4,14 +4,21 @@ import { Send } from "@lucide/vue";
 import MarkdownBlock from "./MarkdownBlock.vue";
 import { useBoardStore } from "../stores/board";
 import { OWNER_OPTIONS, ownerLabel } from "../owner";
-import type { AgentProvider, BoardTask, TaskOwner, TaskStatus } from "../types";
+import { PRIORITY_OPTIONS } from "../priority";
+import type { AgentProvider, BoardTask, TaskOwner, TaskPriority, TaskStatus } from "../types";
 
-const props = defineProps<{ task: BoardTask; projectKey: string; query: string }>();
+const props = withDefaults(defineProps<{
+  task: BoardTask;
+  projectKey: string;
+  query: string;
+  initiallyExpanded?: boolean;
+}>(), { initiallyExpanded: false });
 const board = useBoardStore();
-const expanded = ref(props.task.status === "active");
+const expanded = ref(props.initiallyExpanded);
 const rootElement = ref<HTMLElement | null>(null);
 const statusMenuOpen = ref(false);
 const ownerMenuOpen = ref(false);
+const priorityMenuOpen = ref(false);
 const agentMenuOpen = ref(false);
 const confirmingDone = ref(false);
 
@@ -50,6 +57,7 @@ const dispatching = computed(
 function closeMenus() {
   statusMenuOpen.value = false;
   ownerMenuOpen.value = false;
+  priorityMenuOpen.value = false;
   agentMenuOpen.value = false;
   confirmingDone.value = false;
 }
@@ -64,6 +72,12 @@ function toggleOwnerMenu() {
   const next = !ownerMenuOpen.value;
   closeMenus();
   ownerMenuOpen.value = next;
+}
+
+function togglePriorityMenu() {
+  const next = !priorityMenuOpen.value;
+  closeMenus();
+  priorityMenuOpen.value = next;
 }
 
 function toggleAgentMenu() {
@@ -92,6 +106,12 @@ function applyOwner(owner: TaskOwner) {
   void board.setTaskOwner(props.projectKey, props.task.ref, owner);
 }
 
+function applyPriority(priority: TaskPriority) {
+  closeMenus();
+  if (props.task.priority === priority) return;
+  void board.setTaskPriority(props.projectKey, props.task.ref, priority);
+}
+
 function applyDispatch(provider: AgentProvider, repositoryPath: string) {
   closeMenus();
   void board.dispatchTask(
@@ -108,10 +128,13 @@ function onDocumentPointerDown(event: MouseEvent) {
   }
 }
 
-watch(() => statusMenuOpen.value || ownerMenuOpen.value || agentMenuOpen.value, (open) => {
-  if (open) document.addEventListener("mousedown", onDocumentPointerDown);
-  else document.removeEventListener("mousedown", onDocumentPointerDown);
-});
+watch(
+  () => statusMenuOpen.value || ownerMenuOpen.value || priorityMenuOpen.value || agentMenuOpen.value,
+  (open) => {
+    if (open) document.addEventListener("mousedown", onDocumentPointerDown);
+    else document.removeEventListener("mousedown", onDocumentPointerDown);
+  },
+);
 
 onBeforeUnmount(() => {
   document.removeEventListener("mousedown", onDocumentPointerDown);
@@ -170,7 +193,7 @@ function shortIdentifier(value: string): string {
   <article
     ref="rootElement"
     class="task-row"
-    :class="[`status-${task.status}`, { expanded, 'menu-open': statusMenuOpen || ownerMenuOpen || agentMenuOpen }]"
+    :class="[`status-${task.status}`, { expanded, 'menu-open': statusMenuOpen || ownerMenuOpen || priorityMenuOpen || agentMenuOpen }]"
     :data-ref="task.ref"
   >
     <div class="task-row-head">
@@ -186,6 +209,35 @@ function shortIdentifier(value: string): string {
         <span class="task-title">{{ task.title }}</span>
         <span v-if="task.gate" class="gate-chip">闸门</span>
       </button>
+
+      <div class="task-priority-control">
+        <button
+          type="button"
+          class="priority-chip"
+          :class="`priority-${task.priority}`"
+          aria-haspopup="menu"
+          :aria-expanded="priorityMenuOpen"
+          :title="`当前 P${task.priority}，点击调整优先级`"
+          @click="togglePriorityMenu"
+        >P{{ task.priority }}</button>
+        <div v-if="priorityMenuOpen" class="priority-menu" role="menu" aria-label="调整任务优先级">
+          <button
+            v-for="option in PRIORITY_OPTIONS"
+            :key="option.value"
+            type="button"
+            role="menuitemradio"
+            class="priority-menu-item"
+            :aria-checked="task.priority === option.value"
+            @click="applyPriority(option.value)"
+          >
+            <span class="priority-menu-mark" aria-hidden="true">
+              {{ task.priority === option.value ? "✓" : "" }}
+            </span>
+            <strong>{{ option.label }}</strong>
+            <small>{{ option.hint }}</small>
+          </button>
+        </div>
+      </div>
 
       <div class="task-owner-control">
         <button

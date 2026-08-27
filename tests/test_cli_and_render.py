@@ -37,6 +37,25 @@ def test_cli_flow_add_start_done(db, capsys):
     assert '解锁' in out and '第二件' in out
 
 
+def test_cli_priority_orders_next_and_supports_dynamic_update(db, capsys):
+    run(db, 'init', 'demo', '--name', '示例')
+    run(db, 'add', '常规任务', '--priority', 'P2', '-p', 'demo')
+    run(db, 'add', '最高任务', '--priority', 'P0', '-p', 'demo')
+    run(db, 'add', '核心任务', '--priority', '1', '-p', 'demo')
+    capsys.readouterr()
+
+    run(db, 'next', '-p', 'demo')
+    output = capsys.readouterr().out
+    assert output.index('最高任务') < output.index('核心任务') < output.index('常规任务')
+    assert 'P0' in output and 'P1' in output and 'P2' in output
+
+    run(db, 'edit', '1', '--priority', 'P0', '-p', 'demo')
+    capsys.readouterr()
+    run(db, 'next', '-p', 'demo')
+    output = capsys.readouterr().out
+    assert output.index('常规任务') < output.index('最高任务')  # 同优先级按 ref 稳定排序
+
+
 def test_cli_ls_hides_done_until_flag(db, capsys):
     run(db, 'init', 'demo', '--name', '示例')
     run(db, 'add', '做完的', '-p', 'demo')
@@ -228,7 +247,7 @@ def test_render_uses_xcode_style_light_workspace(tmp_path):
     assert '<main class="content">' in html
     assert 'prefers-color-scheme: dark' not in html
     assert 'background:var(--ground)' in html
-    assert '.done-fold summary, .active-fold summary, .blocked-fold summary, .dropped-fold summary {' in html
+    assert '.done-fold summary, .active-fold summary, .ready-fold summary,' in html
     assert 'grid-template-columns:48px minmax(0,1fr); align-items:center' in html
     assert '.done-fold > .step, .active-fold > .step,' in html
     assert 'grid-template-columns:64px minmax(0,1fr)' in html

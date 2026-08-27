@@ -284,32 +284,40 @@ details[open] > summary::before { transform:rotate(45deg); }
                      background:var(--chrome); }
 .done-fold summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
 .done-fold[open] summary { color:var(--ink-muted); }
-.active-fold { border-top:1px solid var(--rule-soft); }
-.active-fold summary { cursor:pointer; font-size:12px;
+.active-fold, .ready-fold { border-top:1px solid var(--rule-soft); }
+.active-fold summary, .ready-fold summary { cursor:pointer; font-size:12px;
   color:var(--active); background:var(--active-soft); overflow:hidden;
   text-overflow:ellipsis; white-space:nowrap; }
-.active-fold summary:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.ready-fold summary { color:var(--done); background:var(--done-soft); }
+.active-fold summary:focus-visible, .ready-fold summary:focus-visible {
+  outline:2px solid var(--accent); outline-offset:3px; }
 .blocked-fold, .dropped-fold { border-top:1px solid var(--rule-soft); }
 .blocked-fold summary, .dropped-fold summary { cursor:pointer;
   font-size:12px; color:var(--ink-muted); background:var(--chrome); }
 .blocked-fold summary:focus-visible, .dropped-fold summary:focus-visible {
   outline:2px solid var(--accent); outline-offset:3px; }
-.done-fold summary, .active-fold summary, .blocked-fold summary, .dropped-fold summary {
+.done-fold summary, .active-fold summary, .ready-fold summary,
+.blocked-fold summary, .dropped-fold summary {
   min-height:40px; padding:7px 12px 7px 0; display:grid;
   grid-template-columns:48px minmax(0,1fr); align-items:center; }
-.done-fold summary::before, .active-fold summary::before,
+.done-fold summary::before, .active-fold summary::before, .ready-fold summary::before,
 .blocked-fold summary::before, .dropped-fold summary::before {
   grid-column:1; justify-self:center; margin:0; }
 /* 分组 summary 是父节点；折叠组内任务向右缩进一层，避免与父节点同级。 */
-.done-fold > .step, .active-fold > .step,
+.done-fold > .step, .active-fold > .step, .ready-fold > .step,
 .blocked-fold > .step, .dropped-fold > .step {
   grid-template-columns:64px minmax(0,1fr); }
-.done-fold > .step > .node, .active-fold > .step > .node,
+.done-fold > .step > .node, .active-fold > .step > .node, .ready-fold > .step > .node,
 .blocked-fold > .step > .node, .dropped-fold > .step > .node { width:64px; }
 .chip.dropped { background:var(--wait-soft); color:var(--ink-faint); }
 .chip.gate { background:var(--alert-soft); color:var(--alert); }
 .chip.who { background:var(--accent-soft); color:var(--accent); }
 .chip.ready { background:var(--accent-soft); color:var(--accent); }
+.chip.priority { min-width:27px; justify-content:center; font-family:var(--mono); }
+.chip.priority-0 { color:#a51d2d; background:#fdecee; }
+.chip.priority-1 { color:#915100; background:#fff0d8; }
+.chip.priority-2 { color:var(--ink-muted); background:var(--chrome); }
+.chip.priority-3 { color:var(--ink-faint); background:var(--sunken); }
 .dep { font-family:var(--mono); font-size:11.5px; color:var(--ink-faint); }
 .dep b { color:var(--alert); font-weight:600; }
 
@@ -473,12 +481,13 @@ dialog::backdrop { background:rgba(0,0,0,.07); backdrop-filter:none; }
   .note.long .note-content { grid-template-columns:1fr; }
   .note.long .note-aside, .note.long .note-content > .markdown { grid-column:1; grid-row:auto; }
   .note.long .note-content > .markdown { border-left:0; padding-left:0; }
-  .done-fold summary, .active-fold summary, .blocked-fold summary, .dropped-fold summary {
+  .done-fold summary, .active-fold summary, .ready-fold summary,
+  .blocked-fold summary, .dropped-fold summary {
     grid-template-columns:42px minmax(0,1fr); }
-  .done-fold > .step, .active-fold > .step,
+  .done-fold > .step, .active-fold > .step, .ready-fold > .step,
   .blocked-fold > .step, .dropped-fold > .step {
     grid-template-columns:56px minmax(0,1fr); }
-  .done-fold > .step > .node, .active-fold > .step > .node,
+  .done-fold > .step > .node, .active-fold > .step > .node, .ready-fold > .step > .node,
   .blocked-fold > .step > .node, .dropped-fold > .step > .node { width:56px; }
   dialog { inset:0; width:auto; }
   .detail-grid, .form-row { grid-template-columns:1fr; }
@@ -606,7 +615,7 @@ FILTER_SCRIPT = """
       visibleItems += sectionVisible;
       var revealFoldedTasks = Boolean(needle || statusValue !== 'all' || ownerValue !== 'all');
       if (revealFoldedTasks) {
-        section.querySelectorAll('.active-fold, .done-fold, .blocked-fold, .dropped-fold').forEach(function (fold) {
+        section.querySelectorAll('.active-fold, .ready-fold, .done-fold, .blocked-fold, .dropped-fold').forEach(function (fold) {
           fold.open = Boolean(fold.querySelector('.step:not([hidden])'));
         });
       }
@@ -937,7 +946,8 @@ INTERACTIVE_SCRIPT = """
       detailTitle.textContent = task.title;
       detailMeta.textContent = current.project.name + ' · ' + current.project.key + ' #' + task.ref;
       var grid = element('div', 'detail-grid');
-      [['状态', task.status], ['负责人', task.owner || '未指定'], ['分支', task.branch || '—'],
+      [['状态', task.status], ['优先级', 'P' + task.priority],
+       ['负责人', task.owner || '未指定'], ['分支', task.branch || '—'],
        ['PR', task.pr || '—'],
        ['仓库', (task.repositories || []).length ? task.repositories.map(function (repo) { return repo.name; }).join(' · ') : '未关联'],
        ['依赖', task.blocked_by.length ? '#' + task.blocked_by.join(', #') : '无'],
@@ -1031,6 +1041,7 @@ INTERACTIVE_SCRIPT = """
       path = '/api/tasks';
       payload.detail = data.get('body');
       payload.owner = data.get('owner');
+      payload.priority = Number(data.get('priority'));
       payload.accept = data.get('accept');
       payload.repositories = data.getAll('repositories');
     } else {
@@ -1314,13 +1325,16 @@ def _fmt_stamp(iso: str) -> str:
 
 
 def _project_next(project: dict) -> dict | None:
-    for task in project['tasks']:
-        if task['status'] == 'active' and task['actionable']:
-            return task
-    for task in project['tasks']:
-        if task['actionable']:
-            return task
-    return None
+    actionable = sorted(
+        (task for task in project['tasks'] if task['actionable']),
+        key=_priority_key,
+    )
+    return actionable[0] if actionable else None
+
+
+def _priority_key(task: dict) -> tuple[int, int, int]:
+    status_rank = 0 if task['status'] == 'active' else 1
+    return task['priority'], status_rank, task['ref']
 
 
 def _repository_tag(repository: dict, class_name: str) -> str:
@@ -1364,12 +1378,18 @@ def _overview_card(project: dict) -> str:
 def _overview_group(project: dict) -> str:
     # 侧边栏以需求/工作流为大纲节点:卡下挂“当前要动”的任务——进行中、等人工、可开工待办。
     # 完成/已放弃/被阻塞的不进大纲,超出上限收成一行计数,保持侧边栏是速览而非清单。
-    rank = {'active': 0, 'waiting': 1, 'todo': 2}
-    focus = sorted(
-        (t for t in project['tasks']
-         if t['status'] in ('active', 'waiting') or (t['status'] == 'todo' and t['actionable'])),
-        key=lambda t: (rank[t['status']], t['ref']),
+    actionable = sorted(
+        (t for t in project['tasks'] if t['actionable']), key=_priority_key,
     )
+    waiting = sorted(
+        (t for t in project['tasks'] if t['status'] == 'waiting'),
+        key=lambda t: (t['priority'], t['ref']),
+    )
+    blocked_active = sorted(
+        (t for t in project['tasks'] if t['status'] == 'active' and not t['actionable']),
+        key=lambda t: (t['priority'], t['ref']),
+    )
+    focus = actionable + blocked_active + waiting
     shown = focus[:7]
     rest = len(focus) - len(shown)
     rows = ''.join(
@@ -1402,6 +1422,10 @@ def _task_card(task: dict, project: str, live: bool = False,
         ]
     else:
         chips = [f'<span class="chip {task["status"]}">{STATUS_LABEL[task["status"]]}</span>']
+    chips.append(
+        f'<span class="chip priority priority-{task["priority"]}" '
+        f'title="优先级 P{task["priority"]}">P{task["priority"]}</span>'
+    )
     if task['owner']:
         chips.append(f'<span class="chip who">{esc(task["owner"])}</span>')
     if task['gate'] and task['status'] != 'done':
@@ -1464,7 +1488,7 @@ def _task_card(task: dict, project: str, live: bool = False,
     )
     search_text = ' '.join(str(task.get(field) or '') for field in (
         'ref', 'title', 'detail', 'accept', 'owner', 'branch', 'pr'
-    )).casefold() + ' ' + ' '.join(
+    )).casefold() + f' p{task["priority"]} ' + ' '.join(
         repository['name'].casefold() for repository in task.get('repositories', [])
     )
     detail_button = (
@@ -1472,7 +1496,7 @@ def _task_card(task: dict, project: str, live: bool = False,
         f'data-ref="{task["ref"]}">详情</button>' if live else ''
     )
 
-    return f"""        <div class="step" data-filter-item data-ref="{task['ref']}" data-status="{task['status']}" data-actionable="{str(bool(task['actionable'])).lower()}" data-owner="{esc(task.get('owner') or '')}" data-search="{esc(search_text)}">
+    return f"""        <div class="step" data-filter-item data-ref="{task['ref']}" data-status="{task['status']}" data-priority="{task['priority']}" data-actionable="{str(bool(task['actionable'])).lower()}" data-owner="{esc(task.get('owner') or '')}" data-search="{esc(search_text)}">
           <div class="node">{disclosure}</div>
           <div class="card">
             <div class="card-top"><h3>{esc(task['title'])}</h3>{detail_button}{''.join(chips)}</div>
@@ -1570,30 +1594,29 @@ def _link_groups(notes: list[dict], project_key: str) -> str:
 
 def _project_section(project: dict, live: bool = False, status_button: bool = False) -> str:
     tasks = project['tasks']
-    # 只有一个主任务完整展开。优先取可执行 active,其次任意 active,再其次可开工 todo。
-    # 其他 active 收进折叠组,摘要只列标题,主动展开后恢复完整卡片。waiting/可开工 todo
-    # 直接给单行标题;被阻塞 todo、已放弃和已完成默认折叠,展开后也能查看完整内容。
+    # 可开工任务先按 P0→P3 排序，只展示前三项；其余折叠。第一项完整展开，另外两项保持
+    # 紧凑，既给当前工作足够上下文，也不让低优先级队列淹没主区。
     open_tasks = [task for task in tasks if task['status'] != 'done']
     finished = [task for task in tasks if task['status'] == 'done']
     active = [task for task in open_tasks if task['status'] == 'active']
     waiting = [task for task in open_tasks if task['status'] == 'waiting']
-    ready = [
-        task for task in open_tasks
-        if task['status'] == 'todo' and task['actionable']
-    ]
+    actionable = sorted(
+        (task for task in open_tasks if task['actionable']), key=_priority_key,
+    )
+    shown_actionable = actionable[:3]
+    folded_actionable = actionable[3:]
     blocked = [
         task for task in open_tasks
         if task['status'] == 'todo' and not task['actionable']
     ]
     dropped = [task for task in open_tasks if task['status'] == 'dropped']
-    primary = next(
-        (task for task in active if task['actionable']),
-        active[0] if active else (ready[0] if ready else None),
-    )
+    primary = shown_actionable[0] if shown_actionable else (active[0] if active else None)
     primary_ref = primary['ref'] if primary else None
-    extra_active = [task for task in active if task['ref'] != primary_ref]
-    compact = list(waiting)
-    compact += [task for task in ready if task['ref'] != primary_ref]
+    secondary_actionable = [task for task in shown_actionable if task['ref'] != primary_ref]
+    extra_active = [
+        task for task in active
+        if task['ref'] != primary_ref and not task['actionable']
+    ]
 
     parts = []
     if primary:
@@ -1601,6 +1624,24 @@ def _project_section(project: dict, live: bool = False, status_button: bool = Fa
             primary, project['key'], live=live, status_button=status_button,
             expanded=True,
         ))
+    parts.extend(
+        _task_card(
+            task, project['key'], live=live, status_button=status_button,
+        )
+        for task in secondary_actionable
+    )
+    if folded_actionable:
+        rows = '\n'.join(
+            _task_card(
+                task, project['key'], live=live, status_button=status_button,
+            )
+            for task in folded_actionable
+        )
+        parts.append(f"""
+        <details class="ready-fold">
+          <summary>还有 {len(folded_actionable)} 项可开工 · 展开查看剩余优先级</summary>
+{rows}
+        </details>""")
     if extra_active:
         titles = '、'.join(
             esc(task['title'][:18]) + ('…' if len(task['title']) > 18 else '')
@@ -1621,7 +1662,7 @@ def _project_section(project: dict, live: bool = False, status_button: bool = Fa
         _task_card(
             task, project['key'], live=live, status_button=status_button,
         )
-        for task in compact
+        for task in waiting
     )
 
     if blocked:
@@ -1772,7 +1813,8 @@ def _dialogs(projects: list[dict], write_enabled: bool) -> str:
         <div class="form-row"><label>需求<select name="project" required>{options}</select></label><label>标题<input name="title" required maxlength="240"></label></div>
         <label>正文<textarea name="body" placeholder="支持段落、列表、引用、代码块与安全链接"></textarea></label>
         <label data-task-only>关联仓库<select name="repositories" multiple size="4"></select><span class="field-hint">多仓库需求必须明确选择本任务涉及的仓库</span></label>
-        <div class="form-row" data-task-only><label>负责人<input name="owner" placeholder="例如 我"></label><label>验收条件<input name="accept"></label></div>
+        <div class="form-row" data-task-only><label>负责人<input name="owner" placeholder="例如 我"></label><label>优先级<select name="priority" required><option value="0">P0 · 紧急/硬阻塞</option><option value="1">P1 · 本轮核心</option><option value="2" selected>P2 · 常规计划</option><option value="3">P3 · 可延后</option></select></label></div>
+        <label data-task-only>验收条件<input name="accept"></label>
         <div class="form-row" data-finding-only hidden><label>分类<input name="category" list="finding-categories" maxlength="40" placeholder="复用本需求已有主题"><datalist id="finding-categories"></datalist></label><label>度量/证据<input name="metric"></label></div>
         <div class="form-error" role="alert"></div>
         <div><button type="submit" class="action primary">保存</button></div>

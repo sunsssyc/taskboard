@@ -326,11 +326,11 @@ def test_sidebar_outline_lists_focus_tasks_under_project(tmp_path):
     # 大纲组包着项目卡与任务行
     assert '<div class="pgroup" data-project="alpha">' in html
     assert 'class="ptasks"' in html
-    # 进行中 → 等人工 → 可开工待办;完成与被阻塞的不出现
+    # 可开工项在前并按优先级排；同级 active 优先，waiting 作为上下文跟在后面。
     active_at = html.index('class="ptask" data-project="alpha" data-ref="5"')
     waiting_at = html.index('class="ptask" data-project="alpha" data-ref="4"')
     todo_at = html.index('class="ptask" data-project="alpha" data-ref="6"')
-    assert active_at < waiting_at < todo_at
+    assert active_at < todo_at < waiting_at
     assert 'data-ref="1"' not in html.split('class="ptasks"')[1].split('</div>')[0]
     assert 'data-ref="2"' not in html.split('class="ptasks"')[1].split('</div>')[0]
     # 任务行要带状态圆点与 ref,主区卡片也要带 data-ref 才能被定位
@@ -349,13 +349,13 @@ def test_sidebar_outline_caps_rows_with_overflow_count(tmp_path):
     assert 'class="ptask more" data-project="mega">还有 2 项…</button>' in html
 
 
-def test_secondary_active_is_folded_but_expands_to_full_cards(tmp_path):
+def test_only_top_three_actionable_tasks_are_shown_before_priority_fold(tmp_path):
     store = Store(tmp_path / 'fold.db')
     store.create_project('alpha', '项目甲')
-    store.add_task('alpha', '第一张进行中摊开', detail='主任务正文')
-    store.add_task('alpha', '第二张进行中折起', detail='第二张正文')
-    store.add_task('alpha', '第三张进行中折起', detail='第三张正文')
-    store.add_task('alpha', '普通待办')
+    store.add_task('alpha', 'P2 进行中', detail='P2 正文', priority=2)
+    store.add_task('alpha', 'P1 进行中', detail='P1 正文', priority=1)
+    store.add_task('alpha', 'P3 进行中', detail='P3 正文', priority=3)
+    store.add_task('alpha', 'P0 普通待办', detail='P0 主任务正文', priority=0)
     for ref in (1, 2, 3):
         store.set_status('alpha', ref, 'active')
     html = render(store.snapshot())
@@ -366,18 +366,17 @@ def test_secondary_active_is_folded_but_expands_to_full_cards(tmp_path):
     ref2 = section.index('data-ref="2"')
     ref3 = section.index('data-ref="3"')
     ref4 = section.index('data-ref="4"')
-    fold_at = section.index('<details class="active-fold">')
-    assert ref1 < fold_at < ref2 < ref3 < ref4
-    assert '主任务正文' in section[ref1:fold_at]
-    folded_active = section[fold_at:ref4]
-    assert '还有 2 项进行中 · 第二张进行中折起、第三张进行中折起' in folded_active
-    assert '第二张正文' in folded_active and '第三张正文' in folded_active
-    assert folded_active.count('class="task-body" hidden') == 2
-    assert folded_active.count('class="task-disclosure" aria-expanded="false"') == 2
+    fold_at = section.index('<details class="ready-fold">')
+    assert ref4 < ref2 < ref1 < fold_at < ref3
+    assert 'P0 主任务正文' in section[ref4:ref2]
+    folded_ready = section[fold_at:]
+    assert '还有 1 项可开工 · 展开查看剩余优先级' in folded_ready
+    assert 'P3 进行中' in folded_ready
+    assert 'class="task-body" hidden' in folded_ready
     assert '展开全部' not in section
-    # 普通待办没有正文,默认仍收成单行；展开后可看节点生命周期。
-    assert section[ref4:].count('class="task-body" hidden') == 1
-    assert section[ref4:].count('class="task-disclosure" aria-expanded="false"') == 1
+    # 前三项只有最高优先级首项完整展开，其余保持紧凑。
+    shown = section[ref4:fold_at]
+    assert shown.count('class="task-body" hidden') == 2
 
 
 def test_primary_active_prefers_actionable_and_secondary_is_title_only(tmp_path):
@@ -398,11 +397,11 @@ def test_primary_active_prefers_actionable_and_secondary_is_title_only(tmp_path)
     active_fold_at = section.index('<details class="active-fold">')
     secondary_at = section.index('data-ref="2"')
     blocked_at = section.index('<details class="blocked-fold">')
-    assert primary_at < active_fold_at < secondary_at < section.index('data-ref="1"') < blocked_at
+    assert primary_at < section.index('data-ref="1"') < active_fold_at < secondary_at < blocked_at
     assert blocked_at < section.index('data-ref="4"', blocked_at)
     assert '主任务完整正文' in section[primary_at:secondary_at]
 
-    secondary = section[active_fold_at:section.index('data-ref="1"')]
+    secondary = section[active_fold_at:blocked_at]
     assert '次要任务正文' in secondary
     assert 'class="task-body" hidden' in secondary
     assert 'class="task-disclosure" aria-expanded="false"' in secondary
@@ -428,8 +427,8 @@ def test_waiting_ready_are_compact_and_blocked_dropped_are_folded(tmp_path):
     waiting_at = section.index('data-ref="2"')
     ready_at = section.index('data-ref="3"')
     blocked_at = section.index('<details class="blocked-fold">')
-    assert waiting_at < ready_at < blocked_at
-    queue = section[waiting_at:blocked_at]
+    assert ready_at < waiting_at < blocked_at
+    queue = section[ready_at:blocked_at]
     assert '等人工正文' in queue and '可开工正文' in queue
     assert queue.count('class="task-body" hidden') == 2
     assert queue.count('class="task-disclosure" aria-expanded="false"') == 2

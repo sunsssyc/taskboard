@@ -7,6 +7,7 @@ import type {
   BoardLoadResponse,
   BoardSnapshot,
   TaskOwner,
+  TaskPriority,
   TaskStatus,
   ViewPrefs,
 } from "./types";
@@ -14,6 +15,18 @@ import type {
 const ORDER_KEY = "taskboard:order";
 const PINNED_KEY = "taskboard:pinned";
 const browserDemoSnapshot = structuredClone(demoSnapshot);
+
+export function normalizeTaskPriorities(snapshot: BoardSnapshot): BoardSnapshot {
+  for (const project of snapshot.projects) {
+    for (const task of project.tasks) {
+      const priority = (task as { priority?: number }).priority;
+      if (priority !== 0 && priority !== 1 && priority !== 2 && priority !== 3) {
+        task.priority = 2;
+      }
+    }
+  }
+  return snapshot;
+}
 
 export function simulateBrowserAgentDispatch(
   snapshot: BoardSnapshot,
@@ -82,7 +95,9 @@ export async function loadBoardSnapshot(): Promise<BoardLoadResponse> {
       viewPrefs: readBrowserViewPrefs(),
     };
   }
-  return invoke<BoardLoadResponse>("load_board");
+  const response = await invoke<BoardLoadResponse>("load_board");
+  response.snapshot = normalizeTaskPriorities(response.snapshot);
+  return response;
 }
 
 export async function saveTaskStatus(
@@ -105,6 +120,17 @@ export async function saveTaskOwner(
     throw new Error("浏览器演示数据不支持修改负责人;运行 npm run tauri dev 后操作真实看板。");
   }
   await invoke("set_task_owner", { project, reference, owner });
+}
+
+export async function saveTaskPriority(
+  project: string,
+  reference: number,
+  priority: TaskPriority,
+): Promise<void> {
+  if (!window.__TAURI_INTERNALS__) {
+    throw new Error("浏览器演示数据不支持修改优先级;运行 npm run tauri dev 后操作真实看板。");
+  }
+  await invoke("set_task_priority", { project, reference, priority });
 }
 
 export async function dispatchTaskAgent(

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { demoSnapshot } from "./demo";
-import { simulateBrowserAgentDispatch } from "./board";
+import { normalizeTaskPriorities, simulateBrowserAgentDispatch } from "./board";
 
 describe("browser Agent dispatch demo", () => {
   it("records a simulated Codex run without launching a desktop Agent", () => {
@@ -42,5 +42,14 @@ describe("browser Agent dispatch demo", () => {
       accept: null,
       repositoryPath: "/Users/demo/taskboard",
     })).toThrow("找不到任务 #999");
+  });
+});
+
+describe("priority snapshot compatibility", () => {
+  it("maps snapshots from an older CLI to the P2 compatibility default", () => {
+    const snapshot = structuredClone(demoSnapshot);
+    delete (snapshot.projects[0].tasks[0] as { priority?: number }).priority;
+
+    expect(normalizeTaskPriorities(snapshot).projects[0].tasks[0].priority).toBe(2);
   });
 });

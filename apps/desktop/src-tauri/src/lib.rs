@@ -302,6 +302,28 @@ fn owner_args(database: Option<&str>, reference: u32, project: &str, owner: &str
     args
 }
 
+fn priority_args(
+    database: Option<&str>,
+    reference: u32,
+    project: &str,
+    priority: u8,
+) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(database) = database.filter(|value| !value.trim().is_empty()) {
+        args.push("--db".into());
+        args.push(database.into());
+    }
+    args.extend([
+        "edit".into(),
+        reference.to_string(),
+        "--priority".into(),
+        format!("P{priority}"),
+        "-p".into(),
+        project.into(),
+    ]);
+    args
+}
+
 fn agent_run_args(
     database: &Path,
     project: &str,
@@ -492,6 +514,27 @@ fn set_task_owner(project: String, reference: u32, owner: String) -> Result<(), 
 }
 
 #[tauri::command]
+fn set_task_priority(project: String, reference: u32, priority: u8) -> Result<(), String> {
+    if priority > 3 {
+        return Err("桌面端只允许 P0/P1/P2/P3".into());
+    }
+    let project = validated_project(&project)?;
+    let database = env::var("TASKBOARD_DB").ok();
+    let args = priority_args(database.as_deref(), reference, project, priority);
+    let mut errors = Vec::new();
+    for attempt in command_attempts() {
+        match run_board(&attempt, &args) {
+            Ok(_) => return Ok(()),
+            Err(error) => errors.push(error),
+        }
+    }
+    Err(format!(
+        "无法更新任务优先级。已尝试：\n{}",
+        errors.join("\n")
+    ))
+}
+
+#[tauri::command]
 fn dispatch_task_agent(
     state: tauri::State<'_, BridgeState>,
     request: AgentDispatchRequest,
@@ -548,6 +591,7 @@ pub fn run() {
             dispatch_task_agent,
             save_view_prefs,
             set_task_owner,
+            set_task_priority,
             set_task_status
         ])
         .run(tauri::generate_context!())
@@ -652,6 +696,24 @@ mod tests {
             ]
         );
         assert_eq!(OWNER_VALUES, ["", "你", "我", "双方"]);
+    }
+
+    #[test]
+    fn priority_command_maps_to_explicit_cli_value() {
+        let args = priority_args(Some("/tmp/db"), 38, "reg-calibration", 0);
+        assert_eq!(
+            args,
+            vec![
+                "--db",
+                "/tmp/db",
+                "edit",
+                "38",
+                "--priority",
+                "P0",
+                "-p",
+                "reg-calibration"
+            ]
+        );
     }
 
     #[test]

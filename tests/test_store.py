@@ -21,6 +21,52 @@ def test_task_refs_increment_per_project(store, tmp_path):
     assert (a['ref'], b['ref'], c['ref']) == (1, 2, 1)
 
 
+def test_task_priority_defaults_persists_and_can_change(store):
+    default = store.add_task('demo', '默认优先级')
+    urgent = store.add_task('demo', '紧急任务', priority=0)
+
+    assert default['priority'] == 2
+    assert urgent['priority'] == 0
+    updated = store.update_task('demo', default['ref'], priority=1)
+    assert updated['priority'] == 1
+    snapshot = store.snapshot()['projects'][0]
+    assert {task['ref']: task['priority'] for task in snapshot['tasks']} == {
+        default['ref']: 1,
+        urgent['ref']: 0,
+    }
+
+    with pytest.raises(BoardError, match='P0/P1/P2/P3'):
+        store.add_task('demo', '非法优先级', priority=4)
+
+
+def test_opening_old_database_migrates_tasks_to_default_priority(tmp_path):
+    import sqlite3
+
+    path = tmp_path / 'legacy.db'
+    connection = sqlite3.connect(path)
+    connection.executescript("""
+        CREATE TABLE projects (key TEXT PRIMARY KEY, name TEXT NOT NULL, repo TEXT,
+          summary TEXT, archived INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL);
+        CREATE TABLE tasks (id INTEGER PRIMARY KEY AUTOINCREMENT, project TEXT NOT NULL,
+          ref INTEGER NOT NULL, title TEXT NOT NULL, detail TEXT, status TEXT NOT NULL,
+          owner TEXT, gate INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL, UNIQUE(project, ref));
+        INSERT INTO projects VALUES ('demo', 'Demo', NULL, NULL, 0, 'now', 'now');
+        INSERT INTO tasks (project, ref, title, status, gate, created_at, updated_at)
+          VALUES ('demo', 1, '旧任务', 'todo', 0, 'now', 'now');
+    """)
+    connection.commit()
+    connection.close()
+
+    migrated = Store(path)
+    try:
+        assert migrated.get_task('demo', 1)['priority'] == 2
+        assert migrated.snapshot()['projects'][0]['tasks'][0]['priority'] == 2
+    finally:
+        migrated.close()
+
+
 def test_duplicate_project_rejected(store):
     with pytest.raises(BoardError):
         store.create_project('demo', '重复')

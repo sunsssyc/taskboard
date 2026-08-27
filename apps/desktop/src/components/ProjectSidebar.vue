@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { PanelLeft } from "@lucide/vue";
 import { computed, onBeforeUnmount, ref } from "vue";
+import { sortTasksByPriority } from "../priority";
 import type { BoardProject, BoardTask } from "../types";
 
 const props = defineProps<{
@@ -44,13 +45,11 @@ function percentage(project: BoardProject, count: number): number {
 }
 
 function outlineTasks(project: BoardProject): BoardTask[] {
-  return project.tasks
-    .filter(
-      (task) =>
-        task.status === "active" || task.status === "waiting" ||
-        (task.status === "todo" && task.actionable),
-    )
-    .slice(0, 3);
+  const actionable = sortTasksByPriority(project.tasks.filter((task) => task.actionable));
+  const context = sortTasksByPriority(project.tasks.filter(
+    (task) => !task.actionable && (task.status === "active" || task.status === "waiting"),
+  ));
+  return [...actionable, ...context].slice(0, 3);
 }
 
 function nextTask(project: BoardProject): BoardTask | undefined {

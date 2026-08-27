@@ -1,22 +1,29 @@
 <script setup lang="ts">
 import { computed, reactive } from "vue";
 import TaskRow from "./TaskRow.vue";
+import { sortTasksByPriority } from "../priority";
 import type { BoardTask } from "../types";
 
 const props = defineProps<{ tasks: BoardTask[]; projectKey: string; query: string }>();
 
 const expandedGroups = reactive<Record<string, boolean>>({
+  ready: false,
   blocked: false,
   dropped: false,
   done: false,
 });
 
-const focusTasks = computed(() =>
-  props.tasks.filter(
-    (task) =>
-      task.status === "active" || task.status === "waiting" ||
-      (task.status === "todo" && task.actionable),
-  ),
+const actionableTasks = computed(() =>
+  sortTasksByPriority(props.tasks.filter((task) => task.actionable)),
+);
+
+const shownActionableTasks = computed(() => actionableTasks.value.slice(0, 3));
+const foldedActionableTasks = computed(() => actionableTasks.value.slice(3));
+
+const contextTasks = computed(() =>
+  sortTasksByPriority(props.tasks.filter(
+    (task) => !task.actionable && (task.status === "active" || task.status === "waiting"),
+  )),
 );
 
 const archiveGroups = computed(() => [
@@ -48,11 +55,43 @@ function groupOpen(key: string): boolean {
 <template>
   <div v-if="tasks.length" class="task-spine">
     <TaskRow
-      v-for="task in focusTasks"
+      v-for="(task, index) in shownActionableTasks"
       :key="`${task.ref}:${task.title}`"
       :task="task"
       :project-key="projectKey"
       :query="query"
+      :initially-expanded="index === 0"
+    />
+
+    <section v-if="foldedActionableTasks.length" class="archive-group priority-overflow">
+      <button
+        type="button"
+        class="archive-heading priority-overflow-heading"
+        :aria-expanded="groupOpen('ready')"
+        @click="expandedGroups.ready = !expandedGroups.ready"
+      >
+        <span class="disclosure" :class="{ open: groupOpen('ready') }" aria-hidden="true"></span>
+        <span>还有 {{ foldedActionableTasks.length }} 项可开工</span>
+        <small>按 P0 → P3 排序</small>
+      </button>
+      <div v-if="groupOpen('ready')" class="archive-tasks">
+        <TaskRow
+          v-for="task in foldedActionableTasks"
+          :key="`${task.ref}:${task.title}`"
+          :task="task"
+          :project-key="projectKey"
+          :query="query"
+        />
+      </div>
+    </section>
+
+    <TaskRow
+      v-for="(task, index) in contextTasks"
+      :key="`${task.ref}:${task.title}`"
+      :task="task"
+      :project-key="projectKey"
+      :query="query"
+      :initially-expanded="shownActionableTasks.length === 0 && index === 0"
     />
 
     <section

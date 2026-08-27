@@ -112,7 +112,7 @@ def test_live_page_create_task_finding_and_read_detail(tmp_path):
 
         task_payload = json.dumps({
             'project': 'demo', 'title': '网页任务', 'detail': '**说明**\n\n- 步骤',
-            'accept': '通过 `pytest`', 'owner': '我',
+            'accept': '通过 `pytest`', 'owner': '我', 'priority': 0,
         }, ensure_ascii=False)
         status, _, value = request(
             port, 'POST', '/api/tasks', task_payload.encode(), write_headers(port),
@@ -131,6 +131,7 @@ def test_live_page_create_task_finding_and_read_detail(tmp_path):
         status, _, detail = request(port, 'GET', '/api/tasks/demo/1')
         assert status == 200
         assert detail['task']['title'] == '网页任务'
+        assert detail['task']['priority'] == 0
         assert '<strong>说明</strong>' in detail['detail_html']
         assert '<code>pytest</code>' in detail['accept_html']
 
@@ -142,6 +143,7 @@ def test_live_page_create_task_finding_and_read_detail(tmp_path):
 
     store = Store(db_path)
     assert store.get_task('demo', 1)['owner'] == '我'
+    assert store.get_task('demo', 1)['priority'] == 0
     assert store.get_note(1)['metric'] == '54 passed'
     assert store.get_note(1)['category'] == '交付状态'
     store.close()

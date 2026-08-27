@@ -5,6 +5,7 @@ import {
   loadBoardSnapshot,
   saveBoardViewPrefs,
   saveTaskOwner,
+  saveTaskPriority,
   saveTaskStatus,
 } from "../board";
 import type {
@@ -14,6 +15,7 @@ import type {
   BoardSnapshot,
   BoardTask,
   TaskOwner,
+  TaskPriority,
   TaskStatus,
   ViewPrefs,
 } from "../types";
@@ -32,6 +34,7 @@ export function taskMatches(task: BoardTask, query: string): boolean {
     task.owner,
     task.branch,
     task.pr,
+    `P${task.priority}`,
     ...task.repositories.map((repository) => repository.name),
   ].some((value) => normalized(value).includes(needle));
 }
@@ -255,6 +258,20 @@ export const useBoardStore = defineStore("board", () => {
     }
   }
 
+  async function setTaskPriority(
+    projectKey: string,
+    reference: number,
+    priority: TaskPriority,
+  ) {
+    actionError.value = "";
+    try {
+      await saveTaskPriority(projectKey, reference, priority);
+      await load();
+    } catch (reason) {
+      actionError.value = reason instanceof Error ? reason.message : String(reason);
+    }
+  }
+
   async function dispatchTask(
     projectKey: string,
     task: BoardTask,
@@ -351,6 +368,7 @@ export const useBoardStore = defineStore("board", () => {
     togglePinned,
     reorderProject,
     setTaskOwner,
+    setTaskPriority,
     setTaskStatus,
     dispatchTask,
     load,
