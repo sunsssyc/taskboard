@@ -6,6 +6,7 @@ import ProjectWorkspace from "./components/ProjectWorkspace.vue";
 import { useBoardStore } from "./stores/board";
 import type { TaskCounts, TaskStatus } from "./types";
 import { createAutoRefresh } from "./refresh";
+import { ownerLabel } from "./owner";
 import {
   applyZoom,
   readStoredZoom,
@@ -200,7 +201,7 @@ onBeforeUnmount(() => {
         <span class="sr-only">按负责人筛选</span>
         <select v-model="ownerFilter">
           <option value="">全部负责人</option>
-          <option v-for="owner in owners" :key="owner" :value="owner">{{ owner }}</option>
+          <option v-for="owner in owners" :key="owner" :value="owner">{{ ownerLabel(owner) }}</option>
         </select>
       </label>
       <button
@@ -257,7 +258,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div v-if="actionError" class="inline-error" role="alert">
-            状态更新失败：{{ actionError }}
+            任务更新失败：{{ actionError }}
           </div>
 
           <div v-if="filterActive" class="active-filter-note">

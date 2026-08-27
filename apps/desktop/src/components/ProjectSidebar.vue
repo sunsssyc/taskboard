@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { PanelLeft } from "@lucide/vue";
 import { computed, onBeforeUnmount, ref } from "vue";
 import type { BoardProject, BoardTask } from "../types";
 
@@ -178,11 +179,7 @@ onBeforeUnmount(() => {
         aria-controls="project-navigation-list"
         @click="$emit('toggleCollapse')"
       >
-        <svg viewBox="0 0 20 20" aria-hidden="true">
-          <rect x="2.5" y="3" width="15" height="14" rx="2"></rect>
-          <path d="M7 3v14"></path>
-          <path class="toggle-arrow" d="m13 7-3 3 3 3"></path>
-        </svg>
+        <PanelLeft :size="18" :stroke-width="1.8" aria-hidden="true" />
       </button>
     </div>
 

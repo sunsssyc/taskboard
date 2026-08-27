@@ -1,11 +1,12 @@
 import { computed, ref } from "vue";
 import { defineStore } from "pinia";
-import { loadBoardSnapshot, saveBoardViewPrefs, saveTaskStatus } from "../board";
+import { loadBoardSnapshot, saveBoardViewPrefs, saveTaskOwner, saveTaskStatus } from "../board";
 import type {
   BoardNote,
   BoardProject,
   BoardSnapshot,
   BoardTask,
+  TaskOwner,
   TaskStatus,
   ViewPrefs,
 } from "../types";
@@ -235,6 +236,16 @@ export const useBoardStore = defineStore("board", () => {
     }
   }
 
+  async function setTaskOwner(projectKey: string, reference: number, owner: TaskOwner) {
+    actionError.value = "";
+    try {
+      await saveTaskOwner(projectKey, reference, owner);
+      await load();
+    } catch (reason) {
+      actionError.value = reason instanceof Error ? reason.message : String(reason);
+    }
+  }
+
   async function load() {
     loading.value = true;
     error.value = "";
@@ -288,6 +299,7 @@ export const useBoardStore = defineStore("board", () => {
     selectAllProjects,
     togglePinned,
     reorderProject,
+    setTaskOwner,
     setTaskStatus,
     load,
   };

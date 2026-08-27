@@ -238,6 +238,15 @@ const STATUS_SUBCOMMANDS: [(&str, &str); 4] = [
     ("waiting", "wait"),
     ("done", "done"),
 ];
+const OWNER_VALUES: [&str; 4] = ["", "你", "我", "双方"];
+
+fn validated_project(project: &str) -> Result<&str, String> {
+    let project = project.trim();
+    if project.is_empty() || project.len() > 120 || project.starts_with('-') {
+        return Err("需求 key 无效".into());
+    }
+    Ok(project)
+}
 
 fn status_args(
     database: Option<&str>,
@@ -259,6 +268,23 @@ fn status_args(
     args
 }
 
+fn owner_args(database: Option<&str>, reference: u32, project: &str, owner: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(database) = database.filter(|value| !value.trim().is_empty()) {
+        args.push("--db".into());
+        args.push(database.into());
+    }
+    args.extend([
+        "edit".into(),
+        reference.to_string(),
+        "--owner".into(),
+        owner.into(),
+        "-p".into(),
+        project.into(),
+    ]);
+    args
+}
+
 #[tauri::command]
 fn set_task_status(project: String, reference: u32, status: String) -> Result<(), String> {
     let subcommand = STATUS_SUBCOMMANDS
@@ -266,10 +292,7 @@ fn set_task_status(project: String, reference: u32, status: String) -> Result<()
         .find(|(name, _)| *name == status)
         .map(|(_, subcommand)| *subcommand)
         .ok_or_else(|| "桌面端只允许 todo/active/waiting/done".to_string())?;
-    let project = project.trim();
-    if project.is_empty() || project.len() > 120 || project.starts_with('-') {
-        return Err("需求 key 无效".into());
-    }
+    let project = validated_project(&project)?;
 
     let database = env::var("TASKBOARD_DB").ok();
     let args = status_args(database.as_deref(), subcommand, reference, project);
@@ -281,6 +304,27 @@ fn set_task_status(project: String, reference: u32, status: String) -> Result<()
         }
     }
     Err(format!("无法更新任务状态。已尝试：\n{}", errors.join("\n")))
+}
+
+#[tauri::command]
+fn set_task_owner(project: String, reference: u32, owner: String) -> Result<(), String> {
+    if !OWNER_VALUES.contains(&owner.as_str()) {
+        return Err("桌面端只允许用户/Agent/双方/未分配".into());
+    }
+    let project = validated_project(&project)?;
+    let database = env::var("TASKBOARD_DB").ok();
+    let args = owner_args(database.as_deref(), reference, project, &owner);
+    let mut errors = Vec::new();
+    for attempt in command_attempts() {
+        match run_board(&attempt, &args) {
+            Ok(_) => return Ok(()),
+            Err(error) => errors.push(error),
+        }
+    }
+    Err(format!(
+        "无法更新任务负责人。已尝试：\n{}",
+        errors.join("\n")
+    ))
 }
 
 #[tauri::command]
@@ -304,6 +348,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             load_board,
             save_view_prefs,
+            set_task_owner,
             set_task_status
         ])
         .run(tauri::generate_context!())
@@ -379,13 +424,35 @@ mod tests {
     #[test]
     fn status_command_maps_web_whitelist_to_cli() {
         let args = status_args(Some("/tmp/db"), "start", 27, "reg-calibration");
-        assert_eq!(args, vec!["--db", "/tmp/db", "start", "27", "-p", "reg-calibration"]);
+        assert_eq!(
+            args,
+            vec!["--db", "/tmp/db", "start", "27", "-p", "reg-calibration"]
+        );
         assert!(STATUS_SUBCOMMANDS
             .iter()
             .all(|(_, subcommand)| matches!(*subcommand, "todo" | "start" | "wait" | "done")));
         assert!(!STATUS_SUBCOMMANDS
             .iter()
             .any(|(name, _)| matches!(*name, "dropped" | "rm" | "drop")));
+    }
+
+    #[test]
+    fn owner_command_maps_assignment_to_cli_without_expanding_values() {
+        let args = owner_args(Some("/tmp/db"), 32, "taskboard", "我");
+        assert_eq!(
+            args,
+            vec![
+                "--db",
+                "/tmp/db",
+                "edit",
+                "32",
+                "--owner",
+                "我",
+                "-p",
+                "taskboard"
+            ]
+        );
+        assert_eq!(OWNER_VALUES, ["", "你", "我", "双方"]);
     }
 
     #[test]

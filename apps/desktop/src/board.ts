@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { demoSnapshot } from "./demo";
-import type { BoardLoadResponse, TaskStatus, ViewPrefs } from "./types";
+import type { BoardLoadResponse, TaskOwner, TaskStatus, ViewPrefs } from "./types";
 
 const ORDER_KEY = "taskboard:order";
 const PINNED_KEY = "taskboard:pinned";
@@ -41,6 +41,17 @@ export async function saveTaskStatus(
     throw new Error("浏览器演示数据不支持修改状态;运行 npm run tauri dev 后操作真实看板。");
   }
   await invoke("set_task_status", { project, reference, status });
+}
+
+export async function saveTaskOwner(
+  project: string,
+  reference: number,
+  owner: TaskOwner,
+): Promise<void> {
+  if (!window.__TAURI_INTERNALS__) {
+    throw new Error("浏览器演示数据不支持修改负责人;运行 npm run tauri dev 后操作真实看板。");
+  }
+  await invoke("set_task_owner", { project, reference, owner });
 }
 
 export async function saveBoardViewPrefs(prefs: ViewPrefs): Promise<ViewPrefs> {

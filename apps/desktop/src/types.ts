@@ -1,4 +1,5 @@
 export type TaskStatus = "todo" | "active" | "waiting" | "done" | "dropped";
+export type TaskOwner = "" | "你" | "我" | "双方";
 
 export interface Repository {
   id?: number;

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { demoSnapshot } from "../demo";
-import { loadBoardSnapshot, saveTaskStatus } from "../board";
+import { loadBoardSnapshot, saveTaskOwner, saveTaskStatus } from "../board";
 
 vi.mock("../board", () => ({
   loadBoardSnapshot: vi.fn(async () => ({
@@ -10,6 +10,7 @@ vi.mock("../board", () => ({
     viewPrefs: { order: [], pinned: [] },
   })),
   saveBoardViewPrefs: vi.fn(async (prefs: unknown) => prefs),
+  saveTaskOwner: vi.fn(async () => {}),
   saveTaskStatus: vi.fn(async () => {}),
 }));
 import {
@@ -43,6 +44,27 @@ describe("task status switch", () => {
     expect(board.actionError).toContain("CLI 不可用");
     expect(board.snapshot).toStrictEqual(demoSnapshot);
     expect(loadBoardSnapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe("task owner switch", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
+
+  it("delegates assignment to the CLI bridge and reloads the snapshot", async () => {
+    const board = useBoardStore();
+    await board.setTaskOwner("taskboard", 32, "我");
+    expect(saveTaskOwner).toHaveBeenCalledWith("taskboard", 32, "我");
+    expect(loadBoardSnapshot).toHaveBeenCalledTimes(1);
+    expect(board.actionError).toBe("");
+  });
+
+  it("supports clearing an assignment", async () => {
+    const board = useBoardStore();
+    await board.setTaskOwner("taskboard", 32, "");
+    expect(saveTaskOwner).toHaveBeenCalledWith("taskboard", 32, "");
   });
 });
 
