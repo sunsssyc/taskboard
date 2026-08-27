@@ -112,7 +112,7 @@ board add "发布上线" --gate --priority P0 --blocked-by 2 --repo website_back
 # 推进
 board start 1
 board wait 1                                  # 卡在人工/外部动作上(服务器执行、等发版)
-board done 1                                  # 提示解锁了谁、打印验收条件、记录完成时 HEAD
+board done 1                                  # 打印验收条件、记录提交区间、提示解锁了谁和未提交的改动
 board edit 2 --priority P0                    # 目标变化后动态提高优先级
 
 # 看
@@ -123,7 +123,7 @@ board find <关键词>        # 搜任务与记录
 board stale --days 3      # 停滞的在办任务
 board projects            # 所有需求的进度概览(命令名为兼容保留)
 board show 3              # 单个任务详情
-board review 3            # 审查包:意图、改了哪些文件、期间定了什么结论
+board review 3            # 审查包:先按提交读,再看文件清单与期间定的结论
 board review 3 --diff     # 直接出 git diff,渲染交给 git/delta
 board review 3 --committed # 只看已提交区间,在办任务也不比工作区
 board log                 # 变更历史
@@ -305,6 +305,10 @@ sha 是否还在仓库里,rebase/squash 之后明说失效而不是给出错误�
 ——判据是两边 `--git-common-dir` 相同,即同一个仓库的另一棵树。`board review` 对在办
 任务比到工作区(含未提交),因为审 Agent 产出时改动往往还没提交;已完成任务比记录的
 两个端点,`--committed` 可以强制只看已提交的。
+
+审查包先列区间内的提交再给合并 diffstat:提交消息是 Agent 已经付过成本的分段和意图说明,
+按提交读、按提交跳过比吞一整块 diff 便宜。因此 `board done` 前应先把改动提交,否则它们不
+在区间里;工作区还脏时 `board done` 会提示,但提示不等于补救。
 
 未跟踪的新文件单独一节列出,不计入改动规模——那个数字要拿去排序,不能随桌面上有什么
 临时文件波动。过滤直接用 git 的 `--exclude-standard`(`.gitignore` + `.git/info/exclude`

@@ -66,7 +66,8 @@ board init registration-calibration --name "注册风控模型校准" \
 ```bash
 board start <ref>
 board wait <ref>       # 等人工或外部动作，不等同于依赖阻塞
-board done <ref>       # 对照验收条件，记录当前 Git HEAD，提示新解锁任务
+board done <ref>       # 对照验收条件，记录提交区间，提示新解锁任务
+board review <ref>     # 审查包：按提交读，再看合并 diffstat 与期间定的结论
 board add "动作标题" --detail "做什么以及为什么" --owner 我|你|双方 --priority P0|P1|P2|P3
 board dep <ref> --on <ref>
 ```
@@ -99,6 +100,15 @@ board add "发布三端采样契约" -p registration-calibration \
 
 不能把需求外的仓库直接挂到任务上；先确认是否扩大需求范围。已有任务用
 `board edit <ref> -p <key> --repo <name> [--repo <name>...]` 修正关联。
+
+## 完成前先提交
+
+`board start` 记下每个关联仓库的 HEAD 作为起点，`board done` 记终点，两端之间就是这个任务
+的改动。所以 **`board done` 之前必须先把改动提交**，否则它们不在区间里，`board review` 也
+看不到。`board done` 会检测工作区是否还脏并给出提示，但提示不等于补救。
+
+提交要分段：提交消息是给人的分段和意图说明，人按提交读比读一整块 diff 便宜得多。不要把
+一个任务的全部改动堆成一个提交。
 
 ## 用 Markdown 写可扫读内容
 

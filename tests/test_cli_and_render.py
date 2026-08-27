@@ -330,6 +330,73 @@ def test_cli_review_committed_flag_ignores_working_tree(db, tmp_path, capsys):
     assert '区间不完整' in out                 # 还没 done,没有终点,如实说
 
 
+def test_cli_review_lists_commits_before_merged_diffstat(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    git = _repo_with_commit(repo)
+    assert run(db, 'init', 'byc', '--name', '按提交读', '--repo', str(repo)) == 0
+    assert run(db, 'add', '分两步做', '-p', 'byc') == 0
+    assert run(db, 'start', '1', '-p', 'byc') == 0
+    (repo / 'first.py').write_text('a = 1\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '第一步:打地基')
+    (repo / 'second.py').write_text('b = 2\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '第二步:接上去')
+    assert run(db, 'done', '1', '-p', 'byc') == 0
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'byc') == 0
+    out = capsys.readouterr().out
+    assert '第一步:打地基' in out and '第二步:接上去' in out
+    # 提交列表在合并 diffstat 之前:先按提交读,合并数字只作总量参考
+    assert out.index('第二步:接上去') < out.index('2 个文件')
+
+
+def test_cli_review_nudges_to_commit_when_nothing_committed(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    _repo_with_commit(repo)
+    assert run(db, 'init', 'nudge', '--name', '还没提交', '--repo', str(repo)) == 0
+    assert run(db, 'add', '写了没提交', '-p', 'nudge') == 0
+    assert run(db, 'start', '1', '-p', 'nudge') == 0
+    (repo / 'seed.txt').write_text('seed\n改了\n', encoding='utf-8')
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'nudge') == 0
+    assert '改动都还没提交' in capsys.readouterr().out
+
+
+def test_cli_done_warns_about_uncommitted_work(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    git = _repo_with_commit(repo)
+    assert run(db, 'init', 'dirty', '--name', '完成时还脏', '--repo', str(repo)) == 0
+    assert run(db, 'add', '做完但没提交干净', '-p', 'dirty') == 0
+    assert run(db, 'start', '1', '-p', 'dirty') == 0
+    (repo / 'done.py').write_text('x = 1\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '提交了一部分')
+    (repo / 'forgotten.py').write_text('y = 2\n', encoding='utf-8')
+    capsys.readouterr()
+
+    assert run(db, 'done', '1', '-p', 'dirty') == 0
+    out = capsys.readouterr().out
+    assert '未提交' in out and 'forgotten.py' in out
+
+
+def test_cli_done_stays_quiet_when_tree_is_clean(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    git = _repo_with_commit(repo)
+    assert run(db, 'init', 'clean', '--name', '干净收工', '--repo', str(repo)) == 0
+    assert run(db, 'add', '提交干净了', '-p', 'clean') == 0
+    assert run(db, 'start', '1', '-p', 'clean') == 0
+    (repo / 'done.py').write_text('x = 1\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '全提交了')
+    capsys.readouterr()
+
+    assert run(db, 'done', '1', '-p', 'clean') == 0
+    assert '未提交' not in capsys.readouterr().out
+
+
 def test_cli_export_html_and_json(db, tmp_path, capsys):
     repo = tmp_path / 'repo'
     repo.mkdir()

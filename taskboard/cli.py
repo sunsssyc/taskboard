@@ -12,7 +12,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .gitref import diff_argv, diff_numstat, head_sha, untracked_files, worktree_for
+from .gitref import (
+    commits_between, diff_argv, diff_numstat, dirty_files, head_sha, untracked_files,
+    worktree_for,
+)
 from .render import STATUS_LABEL, html_document, render, render_json
 from .store import BoardError, Store, home_dir, load_view_prefs, validate_markdown_newlines
 
@@ -468,6 +471,27 @@ def _range_label(base: str | None, head: str | None, live: bool) -> str:
     return f'{base or "?"}..{head or "?"}(区间不完整)'
 
 
+COMMIT_LIST_LIMIT = 10
+
+
+def _print_commits(tree: str, name: str, base: str | None, head: str | None,
+                   live: bool) -> None:
+    """先按提交读:分段是 Agent 已经付过的成本,合并成一块 diff 等于把它扔掉。"""
+    commits = commits_between(tree, base, head)
+    if commits is None:
+        return
+    if not commits:
+        if live:
+            print(paint(f'\n提交 {name} 0 个 — 改动都还没提交,先提交再审更省事', DIM))
+        return
+    print(f'\n{paint("提交", BOLD)} {name} {base}..{head}  {len(commits)} 个')
+    for commit in commits[:COMMIT_LIST_LIMIT]:
+        size = '合并' if commit['merge'] else f'+{commit["added"]} −{commit["deleted"]}'
+        print(f'  {commit["sha"]:<10}{size:<14}{commit["subject"]}')
+    if len(commits) > COMMIT_LIST_LIMIT:
+        print(paint(f'  还有 {len(commits) - COMMIT_LIST_LIMIT} 个提交', DIM))
+
+
 def cmd_review(store: Store, args) -> int:
     project = resolve_project(store, args.project)
     task = store.get_task(project, args.ref)
@@ -511,6 +535,7 @@ def cmd_review(store: Store, args) -> int:
             gone = '、'.join(entry['missing'])
             print(paint(f'\n改动 {entry["name"]} {label} — {gone} 已不在仓库里,无法出 diff', RED))
             continue
+        _print_commits(tree, entry['name'], base, head, live)
         if files is None:
             print(paint(f'\n改动 {entry["name"]} {label} — 区间不可用', DIM))
             continue
@@ -553,6 +578,16 @@ def cmd_review(store: Store, args) -> int:
     return 0
 
 
+def _warn_uncommitted(store: Store, project: str, ref: int) -> None:
+    """完成时工作区还脏,说明这些改动不在区间里——这是唯一值得提醒的时刻。"""
+    for repository in store.task_repositories(project, ref):
+        dirty = dirty_files(worktree_for(repository['path']))
+        if dirty:
+            preview = '、'.join(dirty[:3]) + ('…' if len(dirty) > 3 else '')
+            print(paint(f'  ⚠ {repository["name"]} 有 {len(dirty)} 个文件未提交,'
+                        f'不在区间里:{preview}', RED))
+
+
 def _status_cmd(status: str):
     def handler(store: Store, args) -> int:
         project = resolve_project(store, args.project)
@@ -566,6 +601,8 @@ def _status_cmd(status: str):
                 print(paint(f'  验收条件:{task["accept"]}', CYAN))
             if status in ('active', 'done'):
                 print_task_commits(store, project, ref, status)
+            if status == 'done':
+                _warn_uncommitted(store, project, ref)
         if status == 'done' and sha and not store.task_repositories(project, args.refs[0]):
             print(paint(f'  记录完成时 HEAD {sha}(任务没有关联仓库)', DIM))
         if status == 'done':

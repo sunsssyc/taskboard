@@ -130,3 +130,47 @@ def untracked_files(repo: str | Path, limit: int = 50) -> list[dict]:
             'binary': binary,
         })
     return files
+
+
+def commits_between(repo: str | Path, base: str | None, head: str | None,
+                    limit: int = 200) -> list[dict] | None:
+    """区间内的提交,新的在前。
+
+    提交消息是 Agent 已经付过成本的分段和意图说明,按提交读比读一整块 diff 便宜,
+    所以审查包先给提交列表,合并 diffstat 只作为总量参考。
+    """
+    if not (base and head):
+        return None
+    out = _run_git(repo, ['log', '--format=%x00%h%x1f%s%x1f%p', '--numstat',
+                          f'{base}..{head}'], timeout=15)
+    if out is None:
+        return None
+    commits = []
+    for block in out.split('\x00'):
+        header, _, body = block.strip('\n').partition('\n')
+        parts = header.split('\x1f')
+        if len(parts) != 3:
+            continue
+        sha, subject, parents = parts
+        added = deleted = 0
+        for line in body.splitlines():
+            cols = line.split('\t')
+            if len(cols) == 3 and '-' not in (cols[0], cols[1]):
+                added += int(cols[0])
+                deleted += int(cols[1])
+        commits.append({
+            'sha': sha, 'subject': subject, 'added': added, 'deleted': deleted,
+            # 合并提交在 git log --numstat 下不产出行数,单独标出来免得看成空改动
+            'merge': len(parents.split()) > 1,
+        })
+        if len(commits) >= limit:
+            break
+    return commits
+
+
+def dirty_files(repo: str | Path) -> list[str]:
+    """工作区里还没提交的文件;git status 本身就不列被忽略的。"""
+    out = _run_git(repo, ['status', '--porcelain'])
+    if out is None:
+        return []
+    return [line[3:] for line in out.splitlines() if line.strip()]
