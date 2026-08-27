@@ -41,6 +41,7 @@ const {
   actionError,
   actionNotice,
   projects,
+  archivedProjects,
   orderedProjects,
   displayProjects,
   owners,
@@ -222,6 +223,7 @@ onBeforeUnmount(() => {
     <div class="dashboard" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
       <ProjectSidebar
         :projects="orderedProjects"
+        :archived-projects="archivedProjects"
         :selected-key="selectedProjectKey"
         :collapsed="sidebarCollapsed"
         :pinned-keys="viewPrefs.pinned"
@@ -234,6 +236,7 @@ onBeforeUnmount(() => {
         @focus-task="focusTask"
         @toggle-pin="board.togglePinned"
         @reorder="board.reorderProject"
+        @set-archived="board.setProjectArchived"
       />
 
       <main class="content">

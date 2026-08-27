@@ -62,6 +62,7 @@ fn export_args(database: Option<&str>) -> Vec<String> {
     args.extend([
         "export".into(),
         "--json".into(),
+        "--all".into(),
         "--show-paths".into(),
         "--out".into(),
         "-".into(),
@@ -324,6 +325,21 @@ fn priority_args(
     args
 }
 
+fn project_archive_args(database: &Path, project: &str, archived: bool) -> Vec<String> {
+    vec![
+        "--db".into(),
+        database.to_string_lossy().into_owned(),
+        "set".into(),
+        "-p".into(),
+        project.into(),
+        if archived {
+            "--archive".into()
+        } else {
+            "--unarchive".into()
+        },
+    ]
+}
+
 fn agent_run_args(
     database: &Path,
     project: &str,
@@ -535,6 +551,34 @@ fn set_task_priority(project: String, reference: u32, priority: u8) -> Result<()
 }
 
 #[tauri::command]
+fn set_project_archived(
+    state: tauri::State<'_, BridgeState>,
+    project: String,
+    archived: bool,
+) -> Result<(), String> {
+    let project = validated_project(&project)?;
+    let database = state
+        .database
+        .lock()
+        .map_err(|_| "无法读取当前数据库路径".to_string())?
+        .clone()
+        .ok_or_else(|| "任务看板尚未载入，不能完成需求".to_string())?;
+    let args = project_archive_args(&database, project, archived);
+    let mut errors = Vec::new();
+    for attempt in command_attempts() {
+        match run_board(&attempt, &args) {
+            Ok(_) => return Ok(()),
+            Err(error) => errors.push(error),
+        }
+    }
+    Err(format!(
+        "无法{}需求。已尝试：\n{}",
+        if archived { "完成" } else { "恢复" },
+        errors.join("\n")
+    ))
+}
+
+#[tauri::command]
 fn dispatch_task_agent(
     state: tauri::State<'_, BridgeState>,
     request: AgentDispatchRequest,
@@ -590,6 +634,7 @@ pub fn run() {
             load_board,
             dispatch_task_agent,
             save_view_prefs,
+            set_project_archived,
             set_task_owner,
             set_task_priority,
             set_task_status
@@ -619,6 +664,7 @@ mod tests {
         assert!(args
             .windows(2)
             .any(|pair| pair[0] == "--out" && pair[1] == "-"));
+        assert!(args.iter().any(|arg| arg == "--all"));
         assert!(!args
             .iter()
             .any(|arg| { matches!(arg.as_str(), "add" | "start" | "wait" | "done" | "todo") }));
@@ -713,6 +759,18 @@ mod tests {
                 "-p",
                 "reg-calibration"
             ]
+        );
+    }
+
+    #[test]
+    fn project_archive_command_is_reversible_and_scoped() {
+        assert_eq!(
+            project_archive_args(Path::new("/tmp/db"), "taskboard", true),
+            vec!["--db", "/tmp/db", "set", "-p", "taskboard", "--archive"]
+        );
+        assert_eq!(
+            project_archive_args(Path::new("/tmp/db"), "taskboard", false),
+            vec!["--db", "/tmp/db", "set", "-p", "taskboard", "--unarchive"]
         );
     }
 

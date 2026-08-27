@@ -1,14 +1,17 @@
 <script setup lang="ts">
 import {
+  IconCircleCheck,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
+  IconRestore,
 } from "@tabler/icons-vue";
-import { computed, onBeforeUnmount, ref } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { sortTasksByPriority } from "../priority";
 import type { BoardProject, BoardTask } from "../types";
 
 const props = defineProps<{
   projects: BoardProject[];
+  archivedProjects: BoardProject[];
   selectedKey: string;
   collapsed: boolean;
   pinnedKeys: string[];
@@ -24,9 +27,17 @@ const dragPointerX = ref(0);
 const dragPointerY = ref(0);
 const dropConfirmedKey = ref("");
 const dropNotice = ref("");
+const completedOpen = ref(false);
 let dropNoticeTimer: number | undefined;
 let pointerDrag: { key: string; startX: number; startY: number; active: boolean } | null = null;
 let suppressClickKey = "";
+
+watch(
+  () => props.archivedProjects.length,
+  (nextLength, previousLength) => {
+    if (nextLength > 0 && previousLength === 0) completedOpen.value = false;
+  },
+);
 
 const draggingProject = computed(() =>
   props.projects.find((project) => project.key === draggingKey.value),
@@ -156,6 +167,7 @@ const emit = defineEmits<{
   focusTask: [ref: number];
   togglePin: [key: string];
   reorder: [draggedKey: string, targetKey: string, before: boolean];
+  setArchived: [key: string, archived: boolean];
 }>();
 
 onBeforeUnmount(() => {
@@ -265,22 +277,35 @@ onBeforeUnmount(() => {
           </span>
         </button>
 
-        <button
-          type="button"
-          class="pin-button"
-          :class="{ active: isPinned(project.key) }"
-          :title="isPinned(project.key) ? '取消置顶' : '置顶'"
-          :aria-label="`${isPinned(project.key) ? '取消置顶' : '置顶'} ${project.name}`"
-          :aria-pressed="isPinned(project.key)"
-          @click.stop="$emit('togglePin', project.key)"
-        >
-          <svg viewBox="0 0 12 12" aria-hidden="true">
-            <g transform="rotate(45 6 6)" fill="currentColor">
-              <circle cx="6" cy="3.1" r="1.8"></circle>
-              <rect x="5.3" y="4.2" width="1.4" height="5.6" rx=".7"></rect>
-            </g>
-          </svg>
-        </button>
+        <span class="project-card-actions">
+          <button
+            type="button"
+            class="pin-button"
+            :class="{ active: isPinned(project.key) }"
+            :title="isPinned(project.key) ? '取消置顶' : '置顶'"
+            :aria-label="`${isPinned(project.key) ? '取消置顶' : '置顶'} ${project.name}`"
+            :aria-pressed="isPinned(project.key)"
+            @pointerdown.stop
+            @click.stop="$emit('togglePin', project.key)"
+          >
+            <svg viewBox="0 0 12 12" aria-hidden="true">
+              <g transform="rotate(45 6 6)" fill="currentColor">
+                <circle cx="6" cy="3.1" r="1.8"></circle>
+                <rect x="5.3" y="4.2" width="1.4" height="5.6" rx=".7"></rect>
+              </g>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="complete-project-button"
+            :aria-label="`完成需求 ${project.name}`"
+            title="完成需求"
+            @pointerdown.stop
+            @click.stop="$emit('setArchived', project.key, true)"
+          >
+            <IconCircleCheck :size="15" :stroke-width="1.8" aria-hidden="true" />
+          </button>
+        </span>
 
         <div v-if="project.key === selectedKey" class="project-outline">
           <button
@@ -296,6 +321,41 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
+
+      <section v-if="archivedProjects.length" class="completed-projects">
+        <button
+          type="button"
+          class="completed-projects-toggle"
+          :aria-expanded="completedOpen"
+          aria-controls="completed-project-list"
+          @click="completedOpen = !completedOpen"
+        >
+          <span class="disclosure" :class="{ open: completedOpen }" aria-hidden="true"></span>
+          <strong>已完成需求</strong>
+          <b>{{ archivedProjects.length }}</b>
+        </button>
+        <div v-if="completedOpen" id="completed-project-list" class="completed-project-list">
+          <div
+            v-for="project in archivedProjects"
+            :key="project.key"
+            class="completed-project-row"
+          >
+            <span>
+              <strong>{{ project.name }}</strong>
+              <small>{{ project.key }}</small>
+            </span>
+            <button
+              type="button"
+              class="restore-project-button"
+              :aria-label="`恢复需求 ${project.name}`"
+              title="恢复到工作列表"
+              @click="$emit('setArchived', project.key, false)"
+            >
+              <IconRestore :size="15" :stroke-width="1.8" aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      </section>
     </nav>
 
     <footer class="navigator-footer">

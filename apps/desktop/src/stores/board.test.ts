@@ -4,6 +4,7 @@ import { demoSnapshot } from "../demo";
 import {
   dispatchTaskAgent,
   loadBoardSnapshot,
+  saveProjectArchived,
   saveTaskOwner,
   saveTaskPriority,
   saveTaskStatus,
@@ -29,6 +30,7 @@ vi.mock("../board", () => ({
   saveTaskOwner: vi.fn(async () => {}),
   saveTaskPriority: vi.fn(async () => {}),
   saveTaskStatus: vi.fn(async () => {}),
+  saveProjectArchived: vi.fn(async () => {}),
 }));
 import {
   moveProjectOrder,
@@ -61,6 +63,53 @@ describe("task status switch", () => {
     expect(board.actionError).toContain("CLI 不可用");
     expect(board.snapshot).toStrictEqual(demoSnapshot);
     expect(loadBoardSnapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe("project completion", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
+
+  it("archives the selected project and returns to the active project list", async () => {
+    vi.useFakeTimers();
+    const board = useBoardStore();
+    board.snapshot = demoSnapshot;
+    board.selectProject("taskboard");
+
+    await board.setProjectArchived("taskboard", true);
+
+    expect(saveProjectArchived).toHaveBeenCalledWith("taskboard", true);
+    expect(board.selectedProjectKey).toBe("");
+    expect(board.actionNotice).toContain("仍有 6 项未完成任务");
+    expect(loadBoardSnapshot).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(board.actionNotice).toBe("");
+    vi.useRealTimers();
+  });
+
+  it("separates archived projects from the normal sidebar collection", () => {
+    const board = useBoardStore();
+    board.snapshot = structuredClone(demoSnapshot);
+    board.snapshot.projects[0].archived = true;
+
+    expect(board.projects.map((project) => project.key)).toEqual(["reg-calibration"]);
+    expect(board.archivedProjects.map((project) => project.key)).toEqual(["taskboard"]);
+  });
+
+  it("restores a completed project through the same bridge", async () => {
+    vi.useFakeTimers();
+    const board = useBoardStore();
+    await board.setProjectArchived("taskboard", false);
+
+    expect(saveProjectArchived).toHaveBeenCalledWith("taskboard", false);
+    expect(board.actionNotice).toContain("已恢复");
+
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(board.actionNotice).toBe("");
+    vi.useRealTimers();
   });
 });
 

@@ -100,6 +100,17 @@ export async function loadBoardSnapshot(): Promise<BoardLoadResponse> {
   return response;
 }
 
+export async function saveProjectArchived(project: string, archived: boolean): Promise<void> {
+  if (!window.__TAURI_INTERNALS__) {
+    const target = browserDemoSnapshot.projects.find((item) => item.key === project);
+    if (!target) throw new Error(`网页演示数据中找不到需求 ${project}。`);
+    target.archived = archived;
+    browserDemoSnapshot.generated_at = new Date().toISOString();
+    return;
+  }
+  await invoke("set_project_archived", { project, archived });
+}
+
 export async function saveTaskStatus(
   project: string,
   reference: number,
