@@ -1,5 +1,8 @@
 <script setup lang="ts">
-import { PanelLeft } from "@lucide/vue";
+import {
+  IconLayoutSidebarLeftCollapse,
+  IconLayoutSidebarLeftExpand,
+} from "@tabler/icons-vue";
 import { computed, onBeforeUnmount, ref } from "vue";
 import { sortTasksByPriority } from "../priority";
 import type { BoardProject, BoardTask } from "../types";
@@ -178,7 +181,18 @@ onBeforeUnmount(() => {
         aria-controls="project-navigation-list"
         @click="$emit('toggleCollapse')"
       >
-        <PanelLeft :size="18" :stroke-width="1.8" aria-hidden="true" />
+        <IconLayoutSidebarLeftExpand
+          v-if="collapsed"
+          :size="20"
+          :stroke-width="1.8"
+          aria-hidden="true"
+        />
+        <IconLayoutSidebarLeftCollapse
+          v-else
+          :size="20"
+          :stroke-width="1.8"
+          aria-hidden="true"
+        />
       </button>
     </div>
 
