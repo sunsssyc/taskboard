@@ -368,6 +368,12 @@ fn trusted_agent_request(
     database: &Path,
     request: &AgentDispatchRequest,
 ) -> Result<AgentDispatchRequest, String> {
+    let requested_repository = fs::canonicalize(&request.repository_path).map_err(|error| {
+        format!(
+            "无法解析 Agent 工作目录 {}：{error}",
+            request.repository_path
+        )
+    })?;
     let database_text = database.to_string_lossy();
     let mut errors = Vec::new();
     for attempt in command_attempts() {
@@ -400,8 +406,12 @@ fn trusted_agent_request(
                     .and_then(Value::as_array)
                     .is_some_and(|repositories| {
                         repositories.iter().any(|repository| {
-                            repository.get("path").and_then(Value::as_str)
-                                == Some(request.repository_path.as_str())
+                            repository
+                                .get("path")
+                                .and_then(Value::as_str)
+                                .and_then(|path| fs::canonicalize(path).ok())
+                                .as_deref()
+                                == Some(requested_repository.as_path())
                         })
                     });
                 if !repository_allowed {
@@ -427,7 +437,7 @@ fn trusted_agent_request(
                         .get("accept")
                         .and_then(Value::as_str)
                         .map(str::to_owned),
-                    repository_path: request.repository_path.clone(),
+                    repository_path: requested_repository.to_string_lossy().into_owned(),
                 });
             }
             Err(error) => errors.push(error),
@@ -707,6 +717,8 @@ mod tests {
                 "读取提示后只回复 SMOKE_OK。".into(),
                 "--accept".into(),
                 "不得创建、修改或删除任何文件。".into(),
+                "--repo".into(),
+                repository_text.clone(),
                 "-p".into(),
                 "smoke".into(),
             ],
