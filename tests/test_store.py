@@ -491,13 +491,34 @@ def test_rejecting_a_concept_requires_a_reason_and_lands_in_the_event_log(store,
         store.align_concept(concept['id'])
 
 
-def test_concepts_touching_reports_hits_for_changed_paths(store, shared):
-    concept = store.add_concept(str(shared), '水位线', files=['sync.py'], project='alpha')
-    repository_id = store.find_repository(str(shared))['id']
+def test_concepts_in_range_matches_by_anchor_not_by_file(store, symbol_repo):
+    """概念锚在 core.py:util 上、这次只改了 core.py:sched,就不该被算进来。
 
-    hits = store.concepts_touching(repository_id, ['sync.py', 'README.md'])
-    assert [entry['id'] for entry in hits] == [concept['id']]
-    assert store.concepts_touching(repository_id, ['README.md']) == []
+    按文件判会让同一文件里所有概念都被牵连,队列的主信号立刻退化成"碰了哪些文件"。
+    """
+    about_sched = store.add_concept(
+        str(symbol_repo), '调度用时间轮', files=['core.py:sync'], project='sym')
+    about_unrelated = store.add_concept(
+        str(symbol_repo), 'unrelated 是纯函数', files=['core.py:unrelated'], project='sym')
+    repository_id = store.find_repository(str(symbol_repo))['id']
+    base = _head(symbol_repo)
+    _rewrite(symbol_repo, sync_body='99', message='只改 sync')
+    head = _head(symbol_repo)
+
+    hits = store.concepts_in_range(repository_id, str(symbol_repo), base, head)
+
+    assert [entry['id'] for entry in hits] == [about_sched['id']]
+    assert about_unrelated['id'] not in [entry['id'] for entry in hits]
+
+
+def test_concepts_proposed_by_task_lists_unaligned_ones(store, shared):
+    task = store.add_task('alpha', '引入新概念的任务')
+    proposed = store.add_concept(
+        str(shared), '新概念', project='alpha', task_ref=task['ref'])
+    store.add_concept(str(shared), '无关概念', project='alpha')
+
+    assert [entry['id'] for entry in store.concepts_proposed_by(task['id'])] == [
+        proposed['id']]
 
 
 def test_search_finds_concepts_proposed_under_another_project(store, shared):

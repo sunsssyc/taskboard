@@ -176,8 +176,8 @@ def dirty_files(repo: str | Path) -> list[str]:
     return [line[3:] for line in out.splitlines() if line.strip()]
 
 
-def moved_anchors(repo: str | Path, since: str | None,
-                  anchors: list[dict]) -> list[str]:
+def moved_anchors(repo: str | Path, since: str | None, anchors: list[dict],
+                  until: str = 'HEAD') -> list[str]:
     """since 之后哪些锚点被动过——概念对齐是否失效就看这个。
 
     带 symbol 的按函数判(git log -L),否则按整个文件判。按文件判会疯狂误报:实测
@@ -197,13 +197,13 @@ def moved_anchors(repo: str | Path, since: str | None,
             by_path.append(anchor)
             continue
         out = _run_git(repo, ['log', '--max-count=1', '--format=%h',
-                              '-L', f':{symbol}:{path}', f'{since}..HEAD'])
+                              '-L', f':{symbol}:{path}', f'{since}..{until}'])
         if out is None:
             by_path.append(anchor)      # git 不认这个函数,退回按文件
         elif out.strip():
             moved.append(f'{path}:{symbol}')
     for anchor in by_path:
-        out = _run_git(repo, ['log', '--max-count=1', '--format=%h', f'{since}..HEAD',
+        out = _run_git(repo, ['log', '--max-count=1', '--format=%h', f'{since}..{until}',
                               '--', anchor['path']])
         if out and out.strip():
             moved.append(anchor['path'])

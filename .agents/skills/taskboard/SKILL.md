@@ -68,6 +68,7 @@ board start <ref>
 board wait <ref>       # 等人工或外部动作，不等同于依赖阻塞
 board done <ref>       # 对照验收条件，记录提交区间，提示新解锁任务
 board review <ref>     # 审查包：按提交读，再看合并 diffstat 与期间定的结论
+board review --queue   # 今天该读什么：按风险分诊，主信号是有没有引入未对齐概念
 board add "动作标题" --detail "做什么以及为什么" --owner 我|你|双方 --priority P0|P1|P2|P3
 board dep <ref> --on <ref>
 ```

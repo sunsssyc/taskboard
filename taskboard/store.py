@@ -12,7 +12,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .gitref import has_commit, moved_anchors, worktree_head_sha
+from .gitref import diff_numstat, has_commit, moved_anchors, worktree_head_sha
 
 # waiting = 卡在人工/外部动作上(服务器执行、页面操作、等发版),我推不动;
 # 与"被依赖阻塞"是两回事,前者等的是人,后者等的是别的任务。
@@ -1307,20 +1307,154 @@ class Store:
         entry['alignment_reset'] = bool(reset)
         return entry
 
-    def concepts_touching(self, repository_id: int, paths: list[str],
-                          check_stale: bool = True) -> list[dict]:
-        """改到的文件命中了哪些概念——C 层"是否引入未对齐概念"的数据来源。"""
-        if not paths:
+    def concepts_in_range(self, repository_id: int, repo_path: str,
+                          base: str | None, head: str | None) -> list[dict]:
+        """这段区间动过哪些概念的锚点。
+
+        必须按锚点粒度判,不能按文件:概念锚在 core.py:util 上,而这次只改了
+        core.py:sched,那它就不该被算进来——否则同一个文件里所有概念都会被牵连,
+        队列的主信号立刻退化成"这次碰了哪些文件"。
+        """
+        if not (base and head):
             return []
         hits = []
-        for entry in self.concepts(check_stale=check_stale):
-            if entry['repository_id'] != repository_id:
+        for entry in self.concepts(check_stale=False):
+            if entry['repository_id'] != repository_id or not entry['files']:
                 continue
-            anchors = [item['path'] for item in entry['files']]
-            if any(path == anchor or path.startswith(anchor.rstrip('/') + '/')
-                   for anchor in anchors for path in paths):
+            moved = moved_anchors(repo_path, base, entry['files'], until=head)
+            if moved:
+                entry['moved'] = moved
                 hits.append(entry)
         return hits
+
+    def concepts_proposed_by(self, task_id: int) -> list[dict]:
+        """这个任务提出来的概念——"引入了新概念"最直接的证据,不用问 git。"""
+        rows = self.conn.execute(
+            "SELECT * FROM notes WHERE kind = 'concept' AND task_id = ? "
+            'AND rejected_at IS NULL ORDER BY id', (task_id,),
+        )
+        return [self._concept_dict(row, check_stale=False) for row in rows]
+
+    # ── 审查分诊 ────────────────────────────────────────────────────────
+    def _queue_candidates(self, project: str | None, since_days: int) -> list[sqlite3.Row]:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat(
+            timespec='seconds')
+        sql = ('SELECT t.* FROM tasks t JOIN task_commits c ON c.task_id = t.id '
+               'WHERE COALESCE(c.head_at, t.updated_at) >= ?')
+        args: list = [cutoff]
+        if project:
+            sql += ' AND t.project = ?'
+            args.append(project)
+        sql += ' GROUP BY t.id ORDER BY COALESCE(MAX(c.head_at), t.updated_at) DESC'
+        return list(self.conn.execute(sql, args))
+
+    def review_queue(self, project: str | None = None, since_days: int = 1) -> list[dict]:
+        """按风险给改动分诊。
+
+        主信号是"有没有引入你还没对齐的概念",不是改动规模:800 行但全落在已对齐概念内的
+        改动扫一眼就够,30 行但引入一个新调度语义的必须精读。规模只是次级信号。
+        """
+        entries = []
+        for task in self._queue_candidates(project, since_days):
+            ranges = self.task_commits(task['project'], task['ref'])
+            changed: dict[int, list[str]] = {}
+            touched_repos: dict[int, dict] = {}
+            files = added = deleted = 0
+            for entry in ranges:
+                repository = self.conn.execute(
+                    'SELECT id, path FROM repositories WHERE path = ?', (entry['path'],),
+                ).fetchone()
+                stat = diff_numstat(entry['path'], entry['base_sha'], entry['head_sha'])
+                if not stat or repository is None:
+                    continue
+                changed.setdefault(repository['id'], []).extend(
+                    item['path'] for item in stat)
+                touched_repos[repository['id']] = {
+                    'path': entry['path'], 'base': entry['base_sha'],
+                    'head': entry['head_sha'],
+                }
+                files += len(stat)
+                added += sum(item['added'] for item in stat)
+                deleted += sum(item['deleted'] for item in stat)
+            # 这个任务自己提的概念,是"引入了新概念"最直接的证据
+            unaligned = [
+                concept for concept in self.concepts_proposed_by(task['id'])
+                if not concept['aligned_at']
+            ]
+            seen = {concept['id'] for concept in unaligned}
+            # 还有一类:改动动了别人已对齐概念的锚点,那份理解也该重新确认。
+            # 但要以概念自己的对齐点为准:如果人是在这次改动之后才对齐的,他已经看过
+            # 新代码了,再拉出来就是重复劳动。所以只认当前确实是 stale 的。
+            for repository_id, entry in touched_repos.items():
+                for concept in self.concepts_in_range(
+                    repository_id, entry['path'], entry['base'], entry['head'],
+                ):
+                    if concept['id'] in seen or not concept['aligned_at']:
+                        continue
+                    if self.concept(concept['id'])['state'] != 'stale':
+                        continue
+                    concept['state'] = 'stale'
+                    unaligned.append(concept)
+                    seen.add(concept['id'])
+            all_paths = [path for paths in changed.values() for path in paths]
+            key_files = self.link_notes_touching(task['project'], all_paths)
+            window = self.notes_between(
+                task['project'],
+                min((entry['base_at'] for entry in ranges if entry['base_at']), default=None),
+                max((entry['head_at'] for entry in ranges if entry['head_at']), default=None),
+            )
+            entries.append(self._triage({
+                'project': task['project'], 'ref': task['ref'], 'title': task['title'],
+                'status': task['status'], 'gate': bool(task['gate']),
+                'accept': task['accept'], 'repositories': len(ranges),
+                'files': files, 'added': added, 'deleted': deleted,
+                'unaligned': unaligned, 'key_files': key_files,
+                'superseded': window['superseded'],
+            }))
+        order = {'align': 0, 'read': 1, 'skim': 2}
+        entries.sort(key=lambda item: (order[item['bucket']], -item['weight']))
+        return entries
+
+    @staticmethod
+    def _triage(entry: dict) -> dict:
+        """三档 + 一行理由。理由要说得出为什么,否则人没法判断该不该信这个排序。"""
+        reasons: list[str] = []
+        weight = 0
+        if entry['unaligned']:
+            names = '、'.join(f'[{c["id"]}] {c["title"]}' for c in entry['unaligned'][:2])
+            reasons.append(f'引入未对齐概念 {names}')
+            weight += 100 * len(entry['unaligned'])
+        if entry['key_files']:
+            hit = '、'.join(note['title'] for note in entry['key_files'][:2])
+            reasons.append(f'触碰关键文件 {hit}')
+            weight += 40
+        if entry['gate']:
+            reasons.append('闸门任务')
+            weight += 30
+        if entry['superseded']:
+            reasons.append(f'期间推翻了 {len(entry["superseded"])} 条结论')
+            weight += 25
+        if not (entry['accept'] or '').strip():
+            reasons.append('没有验收条件,无法判断是否兑现')
+            weight += 20
+        if entry['repositories'] > 1:
+            reasons.append(f'跨 {entry["repositories"]} 个仓库')
+            weight += 15
+        churn = entry['added'] + entry['deleted']
+        if churn >= 400:
+            reasons.append(f'改动 {churn} 行')
+            weight += 10
+        if entry['unaligned']:
+            bucket = 'align'
+        elif weight >= 20:
+            bucket = 'read'
+        else:
+            bucket = 'skim'
+            reasons = reasons or ['只碰已对齐概念,规模不大']
+        entry['bucket'] = bucket
+        entry['weight'] = weight
+        entry['reason'] = ' · '.join(reasons)
+        return entry
 
     def notes_between(self, project: str, start: str | None,
                       end: str | None) -> dict[str, list[dict]]:

@@ -564,6 +564,42 @@ def cmd_align(store: Store, args) -> int:
     return 0
 
 
+QUEUE_BUCKET = {
+    'align': ('必须先对齐', RED),
+    'read': ('精读', CYAN),
+    'skim': ('可跳过', DIM),
+}
+
+
+def cmd_review_queue(store: Store, args) -> int:
+    project = None if args.all_projects else resolve_project(store, args.project)
+    entries = store.review_queue(project=project, since_days=args.since)
+    if not entries:
+        print(f'近 {args.since} 天没有带提交区间的改动')
+        return 0
+    worth = [entry for entry in entries if entry['bucket'] != 'skim'][:args.limit]
+    skipped = [entry for entry in entries if entry not in worth]
+    print(paint(f'该读的 {len(worth)} 条(近 {args.since} 天共 {len(entries)} 个任务有改动)',
+                BOLD))
+    for bucket in ('align', 'read'):
+        group = [entry for entry in worth if entry['bucket'] == bucket]
+        if not group:
+            continue
+        label, color = QUEUE_BUCKET[bucket]
+        print(f'\n{paint(label, color)} {len(group)}')
+        for entry in group:
+            print(f'  #{entry["ref"]:<4}{entry["title"]}')
+            print(paint(f'       {entry["reason"]}', DIM))
+            print(paint(f'       {entry["files"]} 个文件 +{entry["added"]} −{entry["deleted"]}'
+                        f'  ·  board review {entry["ref"]} -p {entry["project"]}', DIM))
+    if skipped:
+        # 全量列表本身就是过载的一部分,可跳过的折成一行
+        refs = ' '.join(f'#{entry["ref"]}' for entry in skipped[:12])
+        more = f' 等 {len(skipped)} 条' if len(skipped) > 12 else ''
+        print(f'\n{paint("可跳过", DIM)} {refs}{more}')
+    return 0
+
+
 COMMIT_LIST_LIMIT = 10
 
 
@@ -586,6 +622,10 @@ def _print_commits(tree: str, name: str, base: str | None, head: str | None,
 
 
 def cmd_review(store: Store, args) -> int:
+    if args.queue:
+        return cmd_review_queue(store, args)
+    if args.ref is None:
+        raise BoardError('要么给任务号看审查包,要么加 --queue 看今天该读什么')
     project = resolve_project(store, args.project)
     task = store.get_task(project, args.ref)
     ranges = store.task_commits(project, args.ref, verify=True)
@@ -1009,8 +1049,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument('--force', action='store_true', help='新路径当前不存在也照样登记')
     sp.set_defaults(func=cmd_repo_move)
 
-    sp = sub.add_parser('review', help='单任务审查包:意图、改了哪些文件、期间定了什么结论')
-    sp.add_argument('ref', type=int)
+    sp = sub.add_parser(
+        'review', help='审查包(给任务号)或今天该读什么(--queue,按风险分诊)')
+    sp.add_argument('ref', type=int, nargs='?')
+    sp.add_argument('--queue', action='store_true',
+                    help='按风险排出今天该读的,主信号是有没有引入未对齐概念')
+    sp.add_argument('--since', type=int, default=1, metavar='天', help='看近几天(默认 1)')
+    sp.add_argument('--limit', type=int, default=5, help='最多列几条(默认 5)')
+    sp.add_argument('-A', '--all-projects', action='store_true')
     sp.add_argument('--diff', action='store_true', help='直接出 git diff,渲染交给 git/delta')
     sp.add_argument('--files', type=int, default=8, help='最多列几个文件(默认 8)')
     sp.add_argument('--committed', action='store_true',

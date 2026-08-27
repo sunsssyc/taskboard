@@ -462,6 +462,81 @@ def test_cli_concept_repo_is_required_only_for_code_anchors(db, tmp_path, capsys
     assert '需求概念' in capsys.readouterr().out
 
 
+def _queued(db, *extra):
+    """跑一次队列并把输出切成 (档位 -> 该档里的任务号)。"""
+    import io, contextlib
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        assert run(db, 'review', '--queue', *extra) == 0
+    return buffer.getvalue()
+
+
+def test_cli_review_queue_ranks_unaligned_concepts_first(db, tmp_path, capsys):
+    repo = tmp_path / 'svc'
+    git = _repo_with_commit(repo)
+    (repo / '.gitattributes').write_text('*.py diff=python\n', encoding='utf-8')
+    (repo / 'core.py').write_text(
+        'def sched():\n    return 1\n\n\ndef util():\n    return 2\n', encoding='utf-8')
+    (repo / 'render.py').write_text('def render():\n    return 3\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '基线')
+    assert run(db, 'init', 'q', '--name', '分诊', '--repo', str(repo)) == 0
+    assert run(db, 'link', 'render.py', '-p', 'q', '--body', '导出入口') == 0
+
+    # 引入新概念的任务
+    assert run(db, 'add', '重构调度器', '-p', 'q', '--accept', '旧接口不变') == 0
+    assert run(db, 'start', '1', '-p', 'q') == 0
+    assert run(db, 'concept', '调度改用时间轮', '--file', 'core.py:sched',
+               '--task', '1', '-p', 'q') == 0
+    (repo / 'core.py').write_text(
+        'def sched():\n    return 99\n\n\ndef util():\n    return 2\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '时间轮')
+    assert run(db, 'done', '1', '-p', 'q') == 0
+
+    # 只碰关键文件的任务
+    assert run(db, 'add', '改导出', '-p', 'q', '--accept', '不乱码') == 0
+    assert run(db, 'start', '2', '-p', 'q') == 0
+    (repo / 'render.py').write_text('def render():\n    return 33\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '改导出')
+    assert run(db, 'done', '2', '-p', 'q') == 0
+    capsys.readouterr()
+
+    out = _queued(db, '-p', 'q')
+    assert '必须先对齐' in out and '调度改用时间轮' in out
+    assert out.index('#1') < out.index('#2')          # 未对齐概念排在关键文件前面
+    assert '触碰关键文件 render.py' in out
+
+    # 对齐之后 #1 掉出该读的队列——队列会因为人的动作而变短
+    assert run(db, 'align', '2') == 0
+    after = _queued(db, '-p', 'q')
+    assert '必须先对齐' not in after
+    assert '可跳过' in after and '#1' in after.split('可跳过')[1]
+
+
+def test_cli_review_queue_collapses_skippable_and_needs_a_target(db, tmp_path, capsys):
+    repo = tmp_path / 'svc'
+    git = _repo_with_commit(repo)
+    assert run(db, 'init', 'quiet', '--name', '安静', '--repo', str(repo)) == 0
+    for index in range(3):
+        assert run(db, 'add', f'小改动{index}', '-p', 'quiet', '--accept', '无回归') == 0
+        assert run(db, 'start', str(index + 1), '-p', 'quiet') == 0
+        (repo / f'f{index}.py').write_text('x = 1\n', encoding='utf-8')
+        git('add', '-A')
+        git('commit', '-q', '-m', f'改动{index}')
+        assert run(db, 'done', str(index + 1), '-p', 'quiet') == 0
+    capsys.readouterr()
+
+    out = _queued(db, '-p', 'quiet')
+    # 全量列表本身就是过载的一部分:可跳过的折成一行
+    assert '该读的 0 条' in out
+    assert out.count('可跳过') == 1
+
+    assert run(db, 'review', '-p', 'quiet') == 1
+    assert '--queue' in capsys.readouterr().err
+
+
 def test_cli_export_html_and_json(db, tmp_path, capsys):
     repo = tmp_path / 'repo'
     repo.mkdir()
