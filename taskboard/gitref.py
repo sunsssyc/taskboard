@@ -176,10 +176,35 @@ def dirty_files(repo: str | Path) -> list[str]:
     return [line[3:] for line in out.splitlines() if line.strip()]
 
 
-def commits_touching(repo: str | Path, since: str | None, paths: list[str]) -> bool:
-    """since 之后有没有提交动过这些路径——概念对齐是否失效就看这个。"""
-    if not since or not paths:
-        return False
-    out = _run_git(repo, ['log', '--max-count=1', '--format=%h', f'{since}..HEAD',
-                          '--', *paths])
-    return bool(out and out.strip())
+def moved_anchors(repo: str | Path, since: str | None,
+                  anchors: list[dict]) -> list[str]:
+    """since 之后哪些锚点被动过——概念对齐是否失效就看这个。
+
+    带 symbol 的按函数判(git log -L),否则按整个文件判。按文件判会疯狂误报:实测
+    taskboard/store.py 在最近 30 个提交里被碰了 13 次,锚在它上面的概念每两个提交
+    就要重新确认一次,几次之后人就闭着眼按确认了。
+
+    git 认不出函数边界时(语言没有 diff 驱动、函数被删或改了名)会直接报错,这时退回
+    按文件判:宁可多提醒一次,也不能漏报成"还对齐着"。
+    """
+    if not since or not anchors:
+        return []
+    moved: list[str] = []
+    by_path: list[dict] = []
+    for anchor in anchors:
+        path, symbol = anchor['path'], anchor.get('symbol')
+        if not symbol:
+            by_path.append(anchor)
+            continue
+        out = _run_git(repo, ['log', '--max-count=1', '--format=%h',
+                              '-L', f':{symbol}:{path}', f'{since}..HEAD'])
+        if out is None:
+            by_path.append(anchor)      # git 不认这个函数,退回按文件
+        elif out.strip():
+            moved.append(f'{path}:{symbol}')
+    for anchor in by_path:
+        out = _run_git(repo, ['log', '--max-count=1', '--format=%h', f'{since}..HEAD',
+                              '--', anchor['path']])
+        if out and out.strip():
+            moved.append(anchor['path'])
+    return moved

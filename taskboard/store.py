@@ -12,7 +12,7 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .gitref import commits_touching, has_commit, worktree_head_sha
+from .gitref import has_commit, moved_anchors, worktree_head_sha
 
 # waiting = 卡在人工/外部动作上(服务器执行、页面操作、等发版),我推不动;
 # 与"被依赖阻塞"是两回事,前者等的是人,后者等的是别的任务。
@@ -1135,6 +1135,7 @@ class Store:
         ).fetchone()
         entry['repository'] = repo['name'] if repo else None
         entry['repository_path'] = repo['path'] if repo else None
+        entry['moved'] = []
         entry['state'] = self._concept_state(entry, check_stale=check_stale)
         return entry
 
@@ -1150,11 +1151,13 @@ class Store:
             return 'proposed'
         if not check_stale:
             return 'aligned'
-        paths = [item['path'] for item in entry['files']]
-        if not (paths and entry['repository_path'] and entry['aligned_commit']):
+        if not (entry['files'] and entry['repository_path'] and entry['aligned_commit']):
             return 'aligned'
-        moved = commits_touching(entry['repository_path'], entry['aligned_commit'], paths)
-        return 'stale' if moved else 'aligned'
+        # 记下动的是哪个锚点:只让人重看变了的那一处,而不是把整张卡重念一遍
+        entry['moved'] = moved_anchors(
+            entry['repository_path'], entry['aligned_commit'], entry['files'],
+        )
+        return 'stale' if entry['moved'] else 'aligned'
 
     def concepts(self, project: str | None = None, repository: str | None = None,
                  include_rejected: bool = False, check_stale: bool = True) -> list[dict]:

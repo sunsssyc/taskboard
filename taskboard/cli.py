@@ -492,7 +492,9 @@ def print_concept(entry: dict, verbose: bool = False) -> None:
         )
         print(paint(f'    锚点 {anchors}', DIM))
     if entry['state'] == 'stale':
-        print(paint(f'    对齐于 {entry["aligned_commit"]},之后锚点文件动过', DIM))
+        moved = '、'.join(entry['moved']) or '锚点'
+        print(paint(f'    对齐于 {entry["aligned_commit"]},之后 {moved} 变过——只需重看这处',
+                    DIM))
 
 
 def cmd_concept(store: Store, args) -> int:

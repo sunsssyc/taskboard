@@ -107,7 +107,9 @@ level 契约"在两边各记各的——前者有「Qwen3.8 思考 A/B 参数口
 
 **每个任务最多 3 个新概念。** 硬限制。agent 认为一个任务需要更多新概念时，这本身是信号：任务太大，或方案太聪明。把概念数量变成复杂度警报。
 
-**对齐锚在提交上。** `notes.aligned_at` + `notes.aligned_commit`。之后任何任务的区间（A 层）改到该概念的锚点文件、且提交晚于 `aligned_commit` → 状态转 `stale`。区分 `stale` 与从未对齐，因为两者要读的量不同。
+**对齐锚在提交上。** `notes.aligned_at` + `notes.aligned_commit`。之后锚点被改动、且提交晚于 `aligned_commit` → 状态转 `stale`。区分 `stale` 与从未对齐，因为两者要读的量不同。
+
+**判定粒度必须到函数。** 实测 `taskboard/store.py` 在最近 30 个提交里被碰 13 次：按文件判会让锚在它上面的概念每两个提交失效一次，几轮之后人就闭着眼按确认——这正是「对齐沦为橡皮图章」那条风险的实现路径。带 `symbol` 的锚点用 `git log -L :symbol:path` 按函数判；git 认不出函数边界时（语言没有 diff 驱动、函数被删或改名）退回按文件，宁可多提醒也不漏报。
 
 **新表 `note_files(note_id, repository_id, path, symbol)`。** 概念要能算失效就必须有代码锚点。顺带修一个现存问题：`link` 记录今天把路径塞在标题里（32 条里只有 17 条看着像路径），C 层的"触碰关键文件"信号没法可靠 join。`note_files` 同时服务 `link` 与 `concept`。
 

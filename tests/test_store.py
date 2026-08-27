@@ -507,6 +507,68 @@ def test_search_finds_concepts_proposed_under_another_project(store, shared):
 
     assert [note['title'] for note in found] == ['水位线增量对账']
 
+@pytest.fixture()
+def symbol_repo(store, tmp_path):
+    """一个文件两个函数——检验失效判定的粒度。"""
+    repo = _git_repo(tmp_path / 'svc')
+    (repo / '.gitattributes').write_text('*.py diff=python\n', encoding='utf-8')
+    (repo / 'core.py').write_text(
+        'def sync():\n    return 1\n\n\ndef unrelated():\n    return 2\n', encoding='utf-8')
+    _git(repo, 'add', '-A')
+    _git(repo, 'commit', '-q', '-m', '基线')
+    store.create_project('sym', '粒度', repositories=[str(repo)])
+    return repo
+
+
+def _rewrite(repo, sync_body='1', unrelated_body='2', message='改动'):
+    (repo / 'core.py').write_text(
+        f'def sync():\n    return {sync_body}\n\n\n'
+        f'def unrelated():\n    return {unrelated_body}\n', encoding='utf-8')
+    _git(repo, 'add', '-A')
+    _git(repo, 'commit', '-q', '-m', message)
+
+
+def test_symbol_anchor_ignores_changes_to_other_functions(store, symbol_repo):
+    by_symbol = store.add_concept(
+        str(symbol_repo), '按函数锚', files=['core.py:sync'], project='sym')
+    by_file = store.add_concept(
+        str(symbol_repo), '按文件锚', files=['core.py'], project='sym')
+    store.align_concept(by_symbol['id'])
+    store.align_concept(by_file['id'])
+
+    _rewrite(symbol_repo, unrelated_body='999', message='只改 unrelated')
+
+    # 同一个文件、同一次提交:按文件锚的被误报,按函数锚的不该动
+    assert store.concept(by_symbol['id'])['state'] == 'aligned'
+    assert store.concept(by_file['id'])['state'] == 'stale'
+
+
+def test_symbol_anchor_goes_stale_and_names_what_moved(store, symbol_repo):
+    concept = store.add_concept(
+        str(symbol_repo), '按函数锚', files=['core.py:sync'], project='sym')
+    store.align_concept(concept['id'])
+
+    _rewrite(symbol_repo, sync_body='42', message='改了 sync')
+
+    stale = store.concept(concept['id'])
+    assert stale['state'] == 'stale'
+    # 指出动的是哪一处:只重看这处,不用把整张卡重念一遍
+    assert stale['moved'] == ['core.py:sync']
+
+
+def test_unknown_symbol_falls_back_to_whole_file(store, symbol_repo):
+    """git 认不出函数时宁可多提醒,也不能漏报成"还对齐着"。"""
+    concept = store.add_concept(
+        str(symbol_repo), '锚了个不存在的函数', files=['core.py:no_such_function'],
+        project='sym')
+    store.align_concept(concept['id'])
+
+    _rewrite(symbol_repo, unrelated_body='999', message='只改 unrelated')
+
+    stale = store.concept(concept['id'])
+    assert stale['state'] == 'stale'
+    assert stale['moved'] == ['core.py']
+
 def test_dropped_tasks_are_not_actionable(store):
     task = store.add_task('demo', '放弃的')
     store.set_status('demo', task['ref'], 'dropped')
