@@ -4,6 +4,7 @@ import {
   dispatchTaskAgent,
   loadBoardSnapshot,
   saveBoardViewPrefs,
+  saveProjectArchived,
   saveTaskOwner,
   saveTaskPriority,
   saveTaskStatus,
@@ -107,8 +108,13 @@ export const useBoardStore = defineStore("board", () => {
   const source = ref("");
   const loading = ref(false);
   const error = ref("");
+  let projectNoticeTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const projects = computed(() => snapshot.value?.projects ?? []);
+  const allProjects = computed(() => snapshot.value?.projects ?? []);
+  const projects = computed(() => allProjects.value.filter((project) => !project.archived));
+  const archivedProjects = computed(() =>
+    allProjects.value.filter((project) => project.archived),
+  );
   const orderedProjects = computed(() => sortProjectsByPrefs(projects.value, viewPrefs.value));
   const selectedProject = computed<BoardProject | null>(() => {
     if (!selectedProjectKey.value) return null;
@@ -238,6 +244,46 @@ export const useBoardStore = defineStore("board", () => {
     persistViewPrefs();
   }
 
+  function clearProjectNoticeTimer() {
+    if (projectNoticeTimer !== undefined) clearTimeout(projectNoticeTimer);
+    projectNoticeTimer = undefined;
+  }
+
+  function showProjectNotice(message: string) {
+    clearProjectNoticeTimer();
+    actionNotice.value = message;
+    projectNoticeTimer = setTimeout(() => {
+      if (actionNotice.value === message) actionNotice.value = "";
+      projectNoticeTimer = undefined;
+    }, 1400);
+  }
+
+  async function setProjectArchived(projectKey: string, archived: boolean) {
+    actionError.value = "";
+    clearProjectNoticeTimer();
+    actionNotice.value = "";
+    const project = projects.value.find((item) => item.key === projectKey);
+    const unfinishedCount = project
+      ? project.counts.todo + project.counts.active + project.counts.waiting
+      : 0;
+    try {
+      await saveProjectArchived(projectKey, archived);
+      if (archived && selectedProjectKey.value === projectKey) {
+        selectedProjectKey.value = "";
+      }
+      await load();
+      showProjectNotice(
+        archived
+          ? unfinishedCount > 0
+            ? `需求已完成，仍有 ${unfinishedCount} 项未完成任务；可在“已完成需求”中恢复。`
+            : "需求已移入“已完成需求”，可在左侧恢复。"
+          : "需求已恢复到左侧工作列表。",
+      );
+    } catch (reason) {
+      actionError.value = reason instanceof Error ? reason.message : String(reason);
+    }
+  }
+
   async function setTaskStatus(projectKey: string, reference: number, status: TaskStatus) {
     actionError.value = "";
     try {
@@ -280,6 +326,7 @@ export const useBoardStore = defineStore("board", () => {
   ) {
     const key = `${projectKey}:${task.ref}`;
     actionError.value = "";
+    clearProjectNoticeTimer();
     actionNotice.value = "";
     dispatchingTask.value = key;
     try {
@@ -323,7 +370,9 @@ export const useBoardStore = defineStore("board", () => {
       if (pendingPreferenceSaves === 0) viewPrefs.value = response.viewPrefs;
       if (
         selectedProjectKey.value &&
-        !response.snapshot.projects.some((project) => project.key === selectedProjectKey.value)
+        !response.snapshot.projects.some(
+          (project) => project.key === selectedProjectKey.value && !project.archived,
+        )
       ) {
         selectedProjectKey.value = "";
       }
@@ -349,6 +398,7 @@ export const useBoardStore = defineStore("board", () => {
     loading,
     error,
     projects,
+    archivedProjects,
     orderedProjects,
     visibleProjects,
     displayProjects,
@@ -367,6 +417,7 @@ export const useBoardStore = defineStore("board", () => {
     selectAllProjects,
     togglePinned,
     reorderProject,
+    setProjectArchived,
     setTaskOwner,
     setTaskPriority,
     setTaskStatus,

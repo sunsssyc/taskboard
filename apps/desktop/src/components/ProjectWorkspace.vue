@@ -42,6 +42,8 @@ defineEmits<{ showAll: [] }>();
     <TaskGroups :tasks="tasks" :project-key="project.key" :query="query" />
 
     <NoteGroups
+      :key="`${project.key}:notes`"
+      :project-key="project.key"
       :findings="findings"
       :risks="risks"
       :links="links"
