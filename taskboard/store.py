@@ -12,6 +12,8 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from .gitref import has_commit, head_sha
+
 # waiting = 卡在人工/外部动作上(服务器执行、页面操作、等发版),我推不动;
 # 与"被依赖阻塞"是两回事,前者等的是人,后者等的是别的任务。
 STATUSES = ('todo', 'active', 'waiting', 'done', 'dropped')
@@ -135,6 +137,17 @@ CREATE TABLE IF NOT EXISTS task_repositories (
     repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
     PRIMARY KEY (task_id, repository_id)
 );
+-- 任务在每个关联仓库上的提交区间:base 是首次开工时的 HEAD,head 是最后一次完成时的
+-- HEAD。两端都在才算完整区间;缺一端说明任务没走完 start→done,不假装能算出改动范围。
+CREATE TABLE IF NOT EXISTS task_commits (
+    task_id       INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    base_sha      TEXT,
+    base_at       TEXT,
+    head_sha      TEXT,
+    head_at       TEXT,
+    PRIMARY KEY (task_id, repository_id)
+);
 CREATE TABLE IF NOT EXISTS agent_runs (
     id                 INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id            INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
@@ -176,6 +189,7 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project, ref);
 CREATE INDEX IF NOT EXISTS idx_project_repositories_repo ON project_repositories(repository_id);
 CREATE INDEX IF NOT EXISTS idx_task_repositories_repo ON task_repositories(repository_id);
+CREATE INDEX IF NOT EXISTS idx_task_commits_repo ON task_commits(repository_id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project, kind);
 CREATE INDEX IF NOT EXISTS idx_events_at ON events(at DESC);
@@ -630,6 +644,68 @@ class Store:
         sql += ' ORDER BY ref'
         return list(self.conn.execute(sql, (project,)))
 
+    def _capture_task_commits(
+        self, task_id: int, repositories: list[sqlite3.Row], status: str,
+    ) -> dict[str, str]:
+        """active 记起点、done 记终点,逐仓库分别取,不看调用方的 cwd。
+
+        起点只记第一次:任务退回重做时区间应该覆盖全部改动,而不是只剩最后一轮。
+        """
+        captured: dict[str, str] = {}
+        stamp = now_iso()
+        for repository in repositories:
+            sha = head_sha(repository['path'])
+            if not sha:
+                continue
+            existing = self.conn.execute(
+                'SELECT base_sha FROM task_commits WHERE task_id = ? AND repository_id = ?',
+                (task_id, repository['id']),
+            ).fetchone()
+            if existing is None:
+                self.conn.execute(
+                    'INSERT INTO task_commits (task_id, repository_id, base_sha, base_at,'
+                    ' head_sha, head_at) VALUES (?,?,?,?,?,?)',
+                    (task_id, repository['id'],
+                     sha if status == 'active' else None,
+                     stamp if status == 'active' else None,
+                     sha if status == 'done' else None,
+                     stamp if status == 'done' else None),
+                )
+            elif status == 'done':
+                self.conn.execute(
+                    'UPDATE task_commits SET head_sha = ?, head_at = ? '
+                    'WHERE task_id = ? AND repository_id = ?',
+                    (sha, stamp, task_id, repository['id']),
+                )
+            else:
+                # 已经有记录还再次 active:起点不重置,也没有新终点可记
+                continue
+            captured[repository['name']] = sha
+        return captured
+
+    def task_commits(self, project: str, ref: int, verify: bool = False) -> list[dict]:
+        """任务逐仓库的提交区间。verify=True 会额外探测 sha 是否还在仓库里。
+
+        verify 要对每个 sha 跑一次 git,只在单任务视图上开;snapshot 渲染全量任务,不开。
+        """
+        task = self.get_task(project, ref)
+        rows = self.conn.execute(
+            'SELECT r.name, r.path, c.base_sha, c.base_at, c.head_sha, c.head_at '
+            'FROM task_commits c JOIN repositories r ON r.id = c.repository_id '
+            'WHERE c.task_id = ? ORDER BY r.name, r.path',
+            (task['id'],),
+        )
+        ranges = []
+        for row in rows:
+            entry = {**dict(row), 'complete': bool(row['base_sha'] and row['head_sha'])}
+            if verify:
+                entry['missing'] = sorted(
+                    label for label, sha in (('base', row['base_sha']), ('head', row['head_sha']))
+                    if sha and not has_commit(row['path'], sha)
+                )
+            ranges.append(entry)
+        return ranges
+
     def set_status(self, project: str, ref: int, status: str,
                    commit_sha: str | None = None) -> sqlite3.Row:
         if status not in STATUSES:
@@ -640,10 +716,19 @@ class Store:
             (status, now_iso(), task['id']),
         )
         payload = {'old': task['status'], 'new': status}
-        if commit_sha:
-            # 记在事件流里而不是任务上:squash/rebase 会让任务字段里的 sha 失效,
-            # 事件流至少留下"完成时 HEAD 在哪"这个事实
-            payload['commit'] = commit_sha
+        repositories = (
+            self.task_repositories(project, ref) if status in ('active', 'done') else []
+        )
+        captured = self._capture_task_commits(task['id'], repositories, status)
+        if captured:
+            payload['commits'] = captured
+        # 区间存表、单个 sha 仍记事件流:squash/rebase 会让 sha 失效,事件流至少留下
+        # "当时 HEAD 在哪"这个事实。没有关联仓库的任务退回调用方给的 cwd HEAD。
+        if status == 'done':
+            if len(captured) == 1:
+                payload['commit'] = next(iter(captured.values()))
+            elif not repositories and commit_sha:
+                payload['commit'] = commit_sha
         self.log_event('status_changed', project=project, task_ref=ref, **payload)
         self.conn.commit()
         return self.get_task(project, ref)
@@ -1000,6 +1085,7 @@ class Store:
                     'repositories': [
                         dict(row) for row in self.task_repositories(key, task['ref'])
                     ],
+                    'commits': self.task_commits(key, task['ref']),
                     'agent_runs': [dict(row) for row in self.agent_runs(key, task['ref'])],
                     'blocked_by': blockers,
                     'open_blockers': open_blockers,

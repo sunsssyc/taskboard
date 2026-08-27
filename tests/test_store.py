@@ -1,3 +1,5 @@
+import subprocess
+
 import pytest
 
 from taskboard.store import (
@@ -245,6 +247,130 @@ def test_move_repository_force_accepts_absent_target(store, tmp_path):
     store.move_repository(str(old), str(target), force=True)
 
     assert [row['path'] for row in store.project_repositories('later')] == [str(target)]
+
+def _git(repo, *argv):
+    subprocess.run(
+        ['git', '-C', str(repo), '-c', 'user.email=t@t', '-c', 'user.name=t', *argv],
+        check=True, capture_output=True,
+    )
+
+
+def _git_repo(path):
+    path.mkdir(parents=True, exist_ok=True)
+    _git(path, 'init', '-q')
+    _git(path, 'commit', '-q', '--allow-empty', '-m', 'init')
+    return path
+
+
+def _head(repo):
+    return subprocess.run(
+        ['git', '-C', str(repo), 'rev-parse', '--short', 'HEAD'],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+
+def test_task_commit_range_is_recorded_per_repository(store, tmp_path):
+    backend = _git_repo(tmp_path / 'backend')
+    frontend = _git_repo(tmp_path / 'frontend')
+    store.create_project('cross', '跨仓库', repositories=[str(backend), str(frontend)])
+    task = store.add_task('cross', '改两个仓库')
+
+    store.set_status('cross', task['ref'], 'active')
+    base = {'backend': _head(backend), 'frontend': _head(frontend)}
+    _git(backend, 'commit', '-q', '--allow-empty', '-m', '后端改动')
+    _git(frontend, 'commit', '-q', '--allow-empty', '-m', '前端改动')
+    store.set_status('cross', task['ref'], 'done')
+
+    ranges = {entry['name']: entry for entry in store.task_commits('cross', task['ref'])}
+    assert set(ranges) == {'backend', 'frontend'}
+    for name, repo in (('backend', backend), ('frontend', frontend)):
+        assert ranges[name]['base_sha'] == base[name]
+        assert ranges[name]['head_sha'] == _head(repo)
+        assert ranges[name]['complete'] is True
+    # 区间要能真的还原出这个任务的提交
+    log = subprocess.run(
+        ['git', '-C', str(backend), 'log', '--oneline',
+         f'{ranges["backend"]["base_sha"]}..{ranges["backend"]["head_sha"]}'],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    assert '后端改动' in log
+
+
+def test_tasks_finished_in_sequence_do_not_share_a_range(store, tmp_path):
+    repo = _git_repo(tmp_path / 'repo')
+    store.create_project('seq', '顺序完成', repositories=[str(repo)])
+    first = store.add_task('seq', '先做的')
+    second = store.add_task('seq', '后做的')
+
+    store.set_status('seq', first['ref'], 'active')
+    _git(repo, 'commit', '-q', '--allow-empty', '-m', '第一件')
+    store.set_status('seq', first['ref'], 'done')
+    store.set_status('seq', second['ref'], 'active')
+    _git(repo, 'commit', '-q', '--allow-empty', '-m', '第二件')
+    store.set_status('seq', second['ref'], 'done')
+
+    one = store.task_commits('seq', first['ref'])[0]
+    two = store.task_commits('seq', second['ref'])[0]
+    assert one['head_sha'] == two['base_sha']  # 首尾相接
+    assert one['base_sha'] != two['base_sha'] and one['head_sha'] != two['head_sha']
+
+
+def test_reopened_task_keeps_original_base(store, tmp_path):
+    repo = _git_repo(tmp_path / 'repo')
+    store.create_project('again', '返工', repositories=[str(repo)])
+    task = store.add_task('again', '要返工的')
+
+    store.set_status('again', task['ref'], 'active')
+    base = _head(repo)
+    _git(repo, 'commit', '-q', '--allow-empty', '-m', '第一轮')
+    store.set_status('again', task['ref'], 'done')
+    store.set_status('again', task['ref'], 'todo')
+    store.set_status('again', task['ref'], 'active')
+    _git(repo, 'commit', '-q', '--allow-empty', '-m', '第二轮')
+    store.set_status('again', task['ref'], 'done')
+
+    entry = store.task_commits('again', task['ref'])[0]
+    # 起点保留第一轮:区间要盖住全部返工，而不是只剩最后一轮
+    assert entry['base_sha'] == base
+    assert entry['head_sha'] == _head(repo)
+
+
+def test_done_without_start_is_marked_incomplete(store, tmp_path):
+    repo = _git_repo(tmp_path / 'repo')
+    store.create_project('direct', '直接完成', repositories=[str(repo)])
+    task = store.add_task('direct', '没走 start')
+
+    store.set_status('direct', task['ref'], 'done')
+
+    entry = store.task_commits('direct', task['ref'])[0]
+    assert entry['base_sha'] is None
+    assert entry['head_sha'] == _head(repo)
+    assert entry['complete'] is False
+
+
+def test_rewritten_history_is_reported_not_silently_wrong(store, tmp_path):
+    repo = _git_repo(tmp_path / 'repo')
+    store.create_project('rebased', '改写历史', repositories=[str(repo)])
+    task = store.add_task('rebased', '会被 rebase 掉')
+
+    store.set_status('rebased', task['ref'], 'active')
+    _git(repo, 'commit', '-q', '--allow-empty', '-m', '原提交')
+    store.set_status('rebased', task['ref'], 'done')
+    stale_head = store.task_commits('rebased', task['ref'])[0]['head_sha']
+    _git(repo, 'commit', '-q', '--allow-empty', '--amend', '-m', '改写后')
+    _git(repo, 'reflog', 'expire', '--expire=now', '--all')
+    _git(repo, 'gc', '-q', '--prune=now')
+
+    assert 'missing' not in store.task_commits('rebased', task['ref'])[0]  # 默认不探测
+    verified = store.task_commits('rebased', task['ref'], verify=True)[0]
+    assert verified['missing'] == ['head']
+    assert verified['head_sha'] == stale_head  # 记录不改写,只是标注失效
+
+
+def test_task_without_repository_records_no_range(store):
+    task = store.add_task('demo', '没有关联仓库')
+    store.set_status('demo', task['ref'], 'done')
+    assert store.task_commits('demo', task['ref']) == []
 
 def test_dropped_tasks_are_not_actionable(store):
     task = store.add_task('demo', '放弃的')

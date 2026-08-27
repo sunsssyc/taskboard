@@ -289,9 +289,14 @@ cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
 
 数据模型:`projects`(产品语义为需求/工作流) / `repositories` /
 `project_repositories` / `tasks`(需求内 ref 唯一) / `task_repositories` /
-`deps`(建边时拒绝成环)/
+`task_commits`(任务逐仓库的提交区间)/ `deps`(建边时拒绝成环)/
 `notes`(finding·risk·link,支持 supersede)/ `events`(只追加的变更流)。
 渲染与 `board next` 共用 `Store.snapshot()`,阻塞判定与"可开工"只有这一处实现。
+
+提交区间:`start` 记每个关联仓库的 HEAD 作为起点,`done` 记终点,起点只记第一次,
+所以任务退回重做后区间仍覆盖全部改动。取 SHA 集中在 `taskboard/gitref.py`,按任务
+关联仓库逐个取,不看执行命令时的 cwd。两端齐全才算完整区间;`board show` 会顺带探测
+sha 是否还在仓库里,rebase/squash 之后明说失效而不是给出错误的 diff 范围。
 
 并发:WAL + `busy_timeout`,`ref` 分配在 `BEGIN IMMEDIATE` 写锁下完成,配合
 `UNIQUE(project, ref)` 双保险,多个 CLI 进程同时写不会重号。

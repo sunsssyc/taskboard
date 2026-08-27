@@ -1,4 +1,5 @@
 import json
+import subprocess
 
 import pytest
 
@@ -159,6 +160,35 @@ def test_cli_repo_move_restores_cwd_detection_after_rename(db, tmp_path, monkeyp
 
     assert run(db, 'ls') == 0
     assert '既有任务' in capsys.readouterr().out
+
+
+def test_cli_start_and_done_print_commit_range(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+
+    def git(*argv):
+        subprocess.run(
+            ['git', '-C', str(repo), '-c', 'user.email=t@t', '-c', 'user.name=t', *argv],
+            check=True, capture_output=True,
+        )
+
+    git('init', '-q')
+    git('commit', '-q', '--allow-empty', '-m', 'init')
+    assert run(db, 'init', 'ranged', '--name', '带区间', '--repo', str(repo)) == 0
+    assert run(db, 'add', '会产生提交的活', '-p', 'ranged') == 0
+    capsys.readouterr()
+
+    assert run(db, 'start', '1', '-p', 'ranged') == 0
+    started = capsys.readouterr().out
+    assert '起点 repo' in started
+
+    git('commit', '-q', '--allow-empty', '-m', '任务里的改动')
+    assert run(db, 'done', '1', '-p', 'ranged') == 0
+    finished = capsys.readouterr().out
+    assert '区间 repo' in finished and '..' in finished
+
+    assert run(db, 'show', '1', '-p', 'ranged') == 0
+    assert '改动 repo' in capsys.readouterr().out
 
 
 def test_cli_export_html_and_json(db, tmp_path, capsys):

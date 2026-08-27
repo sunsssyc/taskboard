@@ -8,10 +8,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
+from .gitref import head_sha
 from .render import STATUS_LABEL, html_document, render, render_json
 from .store import BoardError, Store, home_dir, load_view_prefs, validate_markdown_newlines
 
@@ -155,15 +155,21 @@ def cmd_use(store: Store, args) -> int:
 
 
 def git_head_sha(cwd: Path | None = None) -> str | None:
-    """当前目录所在仓库的短 sha,不在仓库里就返回 None。"""
-    try:
-        result = subprocess.run(
-            ['git', 'rev-parse', '--short', 'HEAD'],
-            cwd=str(cwd or Path.cwd()), capture_output=True, text=True, timeout=3,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return result.stdout.strip() or None if result.returncode == 0 else None
+    """cwd 所在仓库的短 sha。只用于没有关联仓库的任务;有关联仓库时由 Store 逐仓库取。"""
+    return head_sha(cwd)
+
+
+def print_task_commits(store: Store, project: str, ref: int, status: str) -> None:
+    """打印刚记下的区间端点,让人当场看到记的是哪个仓库的哪个提交。"""
+    for entry in store.task_commits(project, ref):
+        if status == 'active' and entry['base_sha']:
+            print(paint(f'  起点 {entry["name"]} {entry["base_sha"]}', DIM))
+        elif status == 'done' and entry['head_sha']:
+            span = (
+                f'{entry["base_sha"]}..{entry["head_sha"]}' if entry['complete']
+                else f'{entry["head_sha"]}(缺起点,区间不完整)'
+            )
+            print(paint(f'  区间 {entry["name"]} {span}', DIM))
 
 
 def cmd_add(store: Store, args) -> int:
@@ -414,6 +420,16 @@ def cmd_show(store: Store, args) -> int:
     if task['branch'] or task['pr']:
         bits = [b for b in (task['branch'], f'PR {task["pr"]}' if task['pr'] else None) if b]
         print(paint('  ' + ' · '.join(bits), DIM))
+    for entry in store.task_commits(project, args.ref, verify=True):
+        if not (entry['base_sha'] or entry['head_sha']):
+            continue
+        span = (
+            f'{entry["base_sha"]}..{entry["head_sha"]}' if entry['complete']
+            else f'{entry["base_sha"] or "?"}..{entry["head_sha"] or "?"}(区间不完整)'
+        )
+        if entry.get('missing'):
+            span += '(' + '、'.join(entry['missing']) + ' 已不在仓库里)'
+        print(paint(f'  改动 {entry["name"]} {span}', DIM))
     if task['detail']:
         print(f'\n{task["detail"]}')
     if task['accept']:
@@ -431,6 +447,7 @@ def cmd_show(store: Store, args) -> int:
 def _status_cmd(status: str):
     def handler(store: Store, args) -> int:
         project = resolve_project(store, args.project)
+        # 没有关联仓库的任务才退回 cwd:有仓库时 Store 会逐仓库取,不看这个值
         sha = git_head_sha() if status == 'done' else None
         for ref in args.refs:
             task = store.set_status(project, ref, status, commit_sha=sha)
@@ -438,8 +455,10 @@ def _status_cmd(status: str):
                   f'  {paint(STATUS_LABEL[status], DIM)}')
             if status == 'done' and task['accept']:
                 print(paint(f'  验收条件:{task["accept"]}', CYAN))
-        if status == 'done' and sha:
-            print(paint(f'  记录完成时 HEAD {sha}', DIM))
+            if status in ('active', 'done'):
+                print_task_commits(store, project, ref, status)
+        if status == 'done' and sha and not store.task_repositories(project, args.refs[0]):
+            print(paint(f'  记录完成时 HEAD {sha}(任务没有关联仓库)', DIM))
         if status == 'done':
             snapshot = store.snapshot()
             data = next(p for p in snapshot['projects'] if p['key'] == project)
