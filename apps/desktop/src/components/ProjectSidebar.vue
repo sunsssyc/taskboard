@@ -301,73 +301,75 @@ onBeforeUnmount(() => {
         <span>{{ activeProjectCount }} 个需求</span>
       </button>
 
-      <div
-        v-for="project in projects"
-        :key="project.key"
-        class="project-group"
-        :data-project-key="project.key"
-        :class="{
-          selected: project.key === selectedKey,
-          pinned: isPinned(project.key),
-          dragging: draggingKey === project.key,
-          'drop-before': dropTargetKey === project.key && dropBefore,
-          'drop-after': dropTargetKey === project.key && !dropBefore,
-          'drop-confirmed': dropConfirmedKey === project.key,
-        }"
-      >
-        <button
-          type="button"
-          class="project-card"
-          :aria-pressed="project.key === selectedKey"
-          @pointerdown="onPointerDown($event, project.key)"
-          @click="onProjectClick(project.key)"
+      <div class="regular-project-list">
+        <div
+          v-for="project in projects"
+          :key="project.key"
+          class="project-group"
+          :data-project-key="project.key"
+          :class="{
+            selected: project.key === selectedKey,
+            pinned: isPinned(project.key),
+            dragging: draggingKey === project.key,
+            'drop-before': dropTargetKey === project.key && dropBefore,
+            'drop-after': dropTargetKey === project.key && !dropBefore,
+            'drop-confirmed': dropConfirmedKey === project.key,
+          }"
         >
-          <span class="project-key">{{ project.key }}</span>
-          <strong>{{ project.name }}</strong>
-        </button>
+          <button
+            type="button"
+            class="project-card"
+            :aria-pressed="project.key === selectedKey"
+            @pointerdown="onPointerDown($event, project.key)"
+            @click="onProjectClick(project.key)"
+          >
+            <span class="project-key">{{ project.key }}</span>
+            <strong>{{ project.name }}</strong>
+          </button>
 
-        <span class="project-card-actions">
-          <button
-            type="button"
-            class="pin-button"
-            :class="{ active: isPinned(project.key) }"
-            :title="isPinned(project.key) ? '取消置顶' : '置顶'"
-            :aria-label="`${isPinned(project.key) ? '取消置顶' : '置顶'} ${project.name}`"
-            :aria-pressed="isPinned(project.key)"
-            @pointerdown.stop
-            @click.stop="$emit('togglePin', project.key)"
-          >
-            <svg viewBox="0 0 12 12" aria-hidden="true">
-              <g transform="rotate(45 6 6)" fill="currentColor">
-                <circle cx="6" cy="3.1" r="1.8"></circle>
-                <rect x="5.3" y="4.2" width="1.4" height="5.6" rx=".7"></rect>
-              </g>
-            </svg>
-          </button>
-          <button
-            type="button"
-            class="complete-project-button"
-            :aria-label="`完成需求 ${project.name}`"
-            title="完成需求"
-            @pointerdown.stop
-            @click.stop="$emit('setArchived', project.key, true)"
-          >
-            <IconCircleCheck :size="15" :stroke-width="1.8" aria-hidden="true" />
-          </button>
-        </span>
+          <span class="project-card-actions">
+            <button
+              type="button"
+              class="pin-button"
+              :class="{ active: isPinned(project.key) }"
+              :title="isPinned(project.key) ? '取消置顶' : '置顶'"
+              :aria-label="`${isPinned(project.key) ? '取消置顶' : '置顶'} ${project.name}`"
+              :aria-pressed="isPinned(project.key)"
+              @pointerdown.stop
+              @click.stop="$emit('togglePin', project.key)"
+            >
+              <svg viewBox="0 0 12 12" aria-hidden="true">
+                <g transform="rotate(45 6 6)" fill="currentColor">
+                  <circle cx="6" cy="3.1" r="1.8"></circle>
+                  <rect x="5.3" y="4.2" width="1.4" height="5.6" rx=".7"></rect>
+                </g>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="complete-project-button"
+              :aria-label="`完成需求 ${project.name}`"
+              title="完成需求"
+              @pointerdown.stop
+              @click.stop="$emit('setArchived', project.key, true)"
+            >
+              <IconCircleCheck :size="15" :stroke-width="1.8" aria-hidden="true" />
+            </button>
+          </span>
 
-        <div v-if="project.key === selectedKey" class="project-outline">
-          <button
-            v-for="task in outlineTasks(project)"
-            :key="task.ref"
-            type="button"
-            class="outline-task"
-            @click="$emit('focusTask', task.ref)"
-          >
-            <span class="outline-dot" :class="taskDot(task)" aria-hidden="true"></span>
-            <span class="outline-ref">#{{ task.ref }}</span>
-            <span class="outline-title">{{ task.title }}</span>
-          </button>
+          <div v-if="project.key === selectedKey" class="project-outline">
+            <button
+              v-for="task in outlineTasks(project)"
+              :key="task.ref"
+              type="button"
+              class="outline-task"
+              @click="$emit('focusTask', task.ref)"
+            >
+              <span class="outline-dot" :class="taskDot(task)" aria-hidden="true"></span>
+              <span class="outline-ref">#{{ task.ref }}</span>
+              <span class="outline-title">{{ task.title }}</span>
+            </button>
+          </div>
         </div>
       </div>
 
