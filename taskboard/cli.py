@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -29,6 +30,11 @@ CYAN = '\033[36m'
 COLOR = {'done': '\033[32m', 'active': '\033[33m', 'todo': '\033[36m',
          'waiting': '\033[35m', 'dropped': '\033[2m'}
 MARK = {'done': '✓', 'active': '▸', 'todo': '·', 'waiting': '⏸', 'dropped': '✗'}
+
+SKILL_TARGETS = {
+    'codex': ('Codex', 'CODEX_HOME', '.codex'),
+    'claude': ('Claude Code', 'CLAUDE_CONFIG_DIR', '.claude'),
+}
 
 
 def _tty() -> bool:
@@ -80,6 +86,49 @@ def _priority(value: str) -> int:
     if normalized not in {'0', '1', '2', '3'}:
         raise argparse.ArgumentTypeError('优先级只能是 P0/P1/P2/P3（P0 最高）')
     return int(normalized)
+
+
+def _skill_source(source: str | None) -> Path:
+    candidate = (
+        Path(source).expanduser()
+        if source
+        else Path(__file__).resolve().parent.parent / '.agents' / 'skills' / 'taskboard'
+    )
+    candidate = candidate.resolve()
+    if not (candidate / 'SKILL.md').is_file():
+        raise BoardError(
+            f'找不到 taskboard skill 源文件: {candidate / "SKILL.md"}；'
+            '请在 taskboard 源码安装中运行，或用 --source 指定目录'
+        )
+    return candidate
+
+
+def _skill_target(name: str) -> tuple[str, Path]:
+    label, env_name, default_dir = SKILL_TARGETS[name]
+    configured_home = os.environ.get(env_name)
+    if name == 'claude' and not configured_home:
+        configured_home = os.environ.get('CLAUDE_HOME')
+    tool_home = (
+        Path(configured_home).expanduser()
+        if configured_home
+        else Path.home() / default_dir
+    )
+    return label, tool_home / 'skills' / 'taskboard'
+
+
+def _copy_skill_tree(source: Path, target: Path, dry_run: bool) -> tuple[int, int]:
+    copied = unchanged = 0
+    for source_file in sorted(path for path in source.rglob('*') if path.is_file()):
+        destination = target / source_file.relative_to(source)
+        if destination.is_file() and destination.read_bytes() == source_file.read_bytes():
+            unchanged += 1
+            continue
+        copied += 1
+        if dry_run:
+            continue
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_file, destination)
+    return copied, unchanged
 
 
 # ── 输出 ────────────────────────────────────────────────────────────────
@@ -960,6 +1009,30 @@ def cmd_serve(store: Store, args) -> int:
     return 0
 
 
+def cmd_skill_sync(store: Store | None, args) -> int:
+    """将仓库内的 taskboard skill 发布到本机 Agent 工具目录。"""
+    source = _skill_source(args.source)
+    target_names = args.target or list(SKILL_TARGETS)
+    synced_paths: dict[Path, str] = {}
+
+    print(f'skill 源: {source}')
+    for target_name in target_names:
+        label, target = _skill_target(target_name)
+        resolved_target = target.resolve()
+        if resolved_target in synced_paths:
+            print(
+                f'{label}: 与 {synced_paths[resolved_target]} 共用 '
+                f'{resolved_target}，无需重复同步'
+            )
+            continue
+
+        copied, unchanged = _copy_skill_tree(source, resolved_target, args.dry_run)
+        synced_paths[resolved_target] = label
+        action = '将更新' if args.dry_run else '已同步'
+        print(f'{label}: {action} {copied} 个文件，{unchanged} 个未变化 · {resolved_target}')
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog='board', description='跨对话需求/工作流看板:CLI 更新进度,本地服务或静态导出查看')
@@ -1224,19 +1297,30 @@ def build_parser() -> argparse.ArgumentParser:
                     help='开发模式:改代码免重启,保存后页面自动刷新')
     sp.set_defaults(func=cmd_serve)
 
+    sp = sub.add_parser('skill-sync', help='把仓库内 taskboard skill 同步到 Agent 工具目录')
+    sp.add_argument('--source', help='skill 源目录（默认仓库 .agents/skills/taskboard）')
+    sp.add_argument('--target', action='append', choices=tuple(SKILL_TARGETS),
+                    help='只同步指定工具；可重复，默认 codex 和 claude')
+    sp.add_argument('--dry-run', action='store_true', help='只报告将更新的文件，不写入')
+    sp.set_defaults(func=cmd_skill_sync, requires_store=False)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    store = Store(args.db)
+    store = None
     try:
+        if not getattr(args, 'requires_store', True):
+            return args.func(None, args)
+        store = Store(args.db)
         return args.func(store, args)
     except BoardError as exc:
         print(f'{paint("错误", RED)}: {exc}', file=sys.stderr)
         return 1
     finally:
-        store.close()
+        if store is not None:
+            store.close()
 
 
 if __name__ == '__main__':

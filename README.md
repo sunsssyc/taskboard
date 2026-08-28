@@ -56,22 +56,29 @@ pip install -e /path/to/claude-taskboard
 仓库内置标准 Agent Skill: `.agents/skills/taskboard`。先安装上面的 `board` CLI，
 再在 claude-taskboard 仓库根目录执行对应命令。
 
-### Codex / Cursor
+### Codex / Claude Code
 
-Codex 和 Cursor 打开本仓库时会自动发现 `.agents/skills`。要让 skill 在所有项目可用：
+仓库内 `.agents/skills/taskboard` 是唯一维护源。把它同步到 Codex 桌面端和 Claude Code 的
+全局 skill 目录：
+
+```bash
+board skill-sync
+board skill-sync --dry-run
+```
+
+默认目标是 `$CODEX_HOME/skills/taskboard`（未设置时为 `~/.codex/skills/taskboard`）和
+`$CLAUDE_CONFIG_DIR/skills/taskboard`（未设置时为 `~/.claude/skills/taskboard`）。也可用
+`--target codex` 或 `--target claude` 只更新一端。命令不会删除目标中的额外文件；两端通过
+软链接共用目录时只同步一次。
+
+### Cursor
+
+Cursor 打开本仓库时会自动发现 `.agents/skills`。要让 skill 在所有项目可用：
 
 ```bash
 TASKBOARD_ROOT="$(pwd)"
 mkdir -p "$HOME/.agents/skills"
 ln -sfn "$TASKBOARD_ROOT/.agents/skills/taskboard" "$HOME/.agents/skills/taskboard"
-```
-
-### Claude Code
-
-```bash
-TASKBOARD_ROOT="$(pwd)"
-mkdir -p "$HOME/.claude/skills"
-ln -sfn "$TASKBOARD_ROOT/.agents/skills/taskboard" "$HOME/.claude/skills/taskboard"
 ```
 
 ### Gemini CLI

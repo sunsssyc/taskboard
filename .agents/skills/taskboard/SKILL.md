@@ -145,6 +145,32 @@ board concept "一句话:是什么、解决什么问题" \
 提交要分段：提交消息是给人的分段和意图说明，人按提交读比读一整块 diff 便宜得多。不要把
 一个任务的全部改动堆成一个提交。
 
+## 代码注释不依赖看板编号
+
+看板编号是本地工作流索引，不是代码语义。不要把 `[27]`、`#38` 等看板编号写入代码注释、
+docstring、测试说明、错误消息或其他会离开看板的文本；没有本地看板上下文的 reviewer 无法据此
+理解代码，而且看板重建、导出或迁移后编号可能失效。
+
+代码内只保留自包含的稳定信息：业务语义、采用该策略的原因、适用边界和撤除条件。具体样本数、
+实验结果和看板任务关系放在 PR 描述、模型评估报告或看板 finding 中；需要给代码证据时，引用仓库
+内可追踪的测试、报告路径或函数名。
+
+## 同步 skill 到 Agent 工具
+
+仓库内 `.agents/skills/taskboard` 是 taskboard skill 的唯一维护源。规则更新后运行：
+
+```bash
+board skill-sync              # 默认同步 Codex 与 Claude Code
+board skill-sync --dry-run    # 只查看差异
+board skill-sync --target codex
+board skill-sync --target claude
+```
+
+命令会复制新增或变化的文件，不删除目标目录的额外文件；如果两端安装目录通过软链接共用同一位置，
+只同步一次并明确提示。Codex 默认写入 `$CODEX_HOME/skills/taskboard`（未设置时为
+`~/.codex/skills/taskboard`），Claude Code 默认写入 `$CLAUDE_CONFIG_DIR/skills/taskboard`
+（未设置时为 `~/.claude/skills/taskboard`）。
+
 ## 用 Markdown 写可扫读内容
 
 标题保持单行、直接写结论或动作，不要塞 Markdown。`metric` 只放最关键的数字和口径。

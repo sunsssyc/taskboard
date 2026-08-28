@@ -19,6 +19,73 @@ def run(db, *argv) -> int:
     return main(['--db', db, *argv])
 
 
+def _write_test_skill(source):
+    (source / 'agents').mkdir(parents=True)
+    (source / 'SKILL.md').write_text('---\nname: taskboard\n---\n', encoding='utf-8')
+    (source / 'agents' / 'openai.yaml').write_text('interface: {}\n', encoding='utf-8')
+
+
+def test_skill_sync_updates_codex_and_claude_without_opening_board_db(
+        tmp_path, monkeypatch, capsys,
+):
+    source = tmp_path / 'source-skill'
+    _write_test_skill(source)
+    codex_home = tmp_path / 'codex-home'
+    claude_home = tmp_path / 'claude-home'
+    unused_db = tmp_path / 'must-not-be-created.db'
+    monkeypatch.setenv('CODEX_HOME', str(codex_home))
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(claude_home))
+
+    assert main([
+        '--db', str(unused_db), 'skill-sync', '--source', str(source),
+    ]) == 0
+
+    assert not unused_db.exists()
+    for tool_home in (codex_home, claude_home):
+        installed = tool_home / 'skills' / 'taskboard'
+        assert (installed / 'SKILL.md').read_text(encoding='utf-8').startswith('---')
+        assert (installed / 'agents' / 'openai.yaml').is_file()
+    output = capsys.readouterr().out
+    assert 'Codex: 已同步 2 个文件' in output
+    assert 'Claude Code: 已同步 2 个文件' in output
+
+
+def test_skill_sync_dry_run_does_not_write(tmp_path, monkeypatch, capsys):
+    source = tmp_path / 'source-skill'
+    _write_test_skill(source)
+    codex_home = tmp_path / 'codex-home'
+    monkeypatch.setenv('CODEX_HOME', str(codex_home))
+
+    assert main([
+        'skill-sync', '--source', str(source), '--target', 'codex', '--dry-run',
+    ]) == 0
+
+    assert not (codex_home / 'skills' / 'taskboard').exists()
+    assert 'Codex: 将更新 2 个文件' in capsys.readouterr().out
+
+
+def test_skill_sync_writes_shared_symlink_target_only_once(tmp_path, monkeypatch, capsys):
+    source = tmp_path / 'source-skill'
+    _write_test_skill(source)
+    shared_target = tmp_path / 'shared-taskboard-skill'
+    shared_target.mkdir()
+    codex_home = tmp_path / 'codex-home'
+    claude_home = tmp_path / 'claude-home'
+    for tool_home in (codex_home, claude_home):
+        skills_dir = tool_home / 'skills'
+        skills_dir.mkdir(parents=True)
+        (skills_dir / 'taskboard').symlink_to(shared_target, target_is_directory=True)
+    monkeypatch.setenv('CODEX_HOME', str(codex_home))
+    monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(claude_home))
+
+    assert main(['skill-sync', '--source', str(source)]) == 0
+
+    assert (shared_target / 'SKILL.md').is_file()
+    output = capsys.readouterr().out
+    assert 'Codex: 已同步 2 个文件' in output
+    assert 'Claude Code: 与 Codex 共用' in output
+
+
 def test_format_stamp_uses_utc_plus_8():
     assert _fmt_stamp('2026-08-21T00:15:00+00:00') == '2026-08-21 08:15 UTC+8'
 
