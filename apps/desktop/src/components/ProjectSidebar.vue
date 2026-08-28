@@ -3,11 +3,17 @@ import {
   IconCircleCheck,
   IconLayoutSidebarLeftCollapse,
   IconLayoutSidebarLeftExpand,
+  IconPin,
   IconPinnedFilled,
   IconRestore,
 } from "@tabler/icons-vue";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { sortTasksByPriority } from "../priority";
+import {
+  MAX_SIDEBAR_WIDTH,
+  MIN_SIDEBAR_WIDTH,
+  SIDEBAR_WIDTH_STEP,
+} from "../sidebar";
 import type { BoardProject, BoardTask } from "../types";
 
 const props = defineProps<{
@@ -16,6 +22,7 @@ const props = defineProps<{
   archivedProjects: BoardProject[];
   selectedKey: string;
   collapsed: boolean;
+  sidebarWidth: number;
   pinnedKeys: string[];
   source: string;
   database: string | null;
@@ -160,10 +167,22 @@ function onProjectClick(key: string) {
   emit("select", key);
 }
 
+function onResizeHandleKey(event: KeyboardEvent) {
+  if (event.key === "ArrowLeft") emit("resizeBy", -SIDEBAR_WIDTH_STEP);
+  else if (event.key === "ArrowRight") emit("resizeBy", SIDEBAR_WIDTH_STEP);
+  else if (event.key === "Home") emit("resizeTo", MIN_SIDEBAR_WIDTH);
+  else if (event.key === "End") emit("resizeTo", MAX_SIDEBAR_WIDTH);
+  else return;
+  event.preventDefault();
+}
+
 const emit = defineEmits<{
   select: [key: string];
   selectAll: [];
   toggleCollapse: [];
+  resizeStart: [event: PointerEvent];
+  resizeBy: [delta: number];
+  resizeTo: [width: number];
   focusTask: [ref: number];
   togglePin: [key: string];
   reorder: [draggedKey: string, targetKey: string, before: boolean];
@@ -338,12 +357,7 @@ onBeforeUnmount(() => {
               @pointerdown.stop
               @click.stop="$emit('togglePin', project.key)"
             >
-              <svg viewBox="0 0 12 12" aria-hidden="true">
-                <g transform="rotate(45 6 6)" fill="currentColor">
-                  <circle cx="6" cy="3.1" r="1.8"></circle>
-                  <rect x="5.3" y="4.2" width="1.4" height="5.6" rx=".7"></rect>
-                </g>
-              </svg>
+              <IconPin :size="15" :stroke-width="1.8" aria-hidden="true" />
             </button>
             <button
               type="button"
@@ -418,6 +432,22 @@ onBeforeUnmount(() => {
         <small :title="database ?? ''">{{ database || "数据库路径已隐藏" }}</small>
       </span>
     </footer>
+
+    <div
+      v-if="!collapsed"
+      class="navigator-resize-handle"
+      role="separator"
+      tabindex="0"
+      aria-label="调整需求栏宽度"
+      aria-orientation="vertical"
+      :aria-valuemin="MIN_SIDEBAR_WIDTH"
+      :aria-valuemax="MAX_SIDEBAR_WIDTH"
+      :aria-valuenow="sidebarWidth"
+      aria-controls="project-navigation-list"
+      title="拖动调整需求栏宽度"
+      @pointerdown="$emit('resizeStart', $event)"
+      @keydown="onResizeHandleKey"
+    ></div>
   </aside>
 
   <Teleport to="body">

@@ -34,6 +34,7 @@
   --sidebar-section-size: 11.5px;
   --sidebar-item-size: 12.5px;
   --sidebar-meta-size: 10px;
+  --content-max-width: 1600px;
 }
 
 * { box-sizing: border-box; }
@@ -231,12 +232,14 @@ code {
   display: grid;
   min-width: 0;
   min-height: 0;
-  grid-template-columns: 248px minmax(0, 1fr);
+  grid-template-columns: var(--sidebar-width, 248px) minmax(0, 1fr);
   transition: grid-template-columns 180ms ease;
 }
 .dashboard.sidebar-collapsed { grid-template-columns: 42px minmax(0, 1fr); }
+.dashboard.sidebar-resizing { transition: none; }
 
 .navigator {
+  position: relative;
   display: flex;
   min-width: 0;
   min-height: 0;
@@ -245,6 +248,40 @@ code {
   background: var(--chrome);
   overflow: hidden;
 }
+
+.navigator-resize-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  width: 7px;
+  border: 0;
+  outline: none;
+  cursor: col-resize;
+  touch-action: none;
+}
+.navigator-resize-handle::after {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 2px;
+  background: transparent;
+  content: "";
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+.navigator-resize-handle:hover::after,
+.navigator-resize-handle:focus-visible::after,
+.dashboard.sidebar-resizing .navigator-resize-handle::after {
+  background: var(--accent);
+  box-shadow: -2px 0 7px rgb(0 122 255 / 18%);
+}
+body.sidebar-resize-active {
+  cursor: col-resize;
+  user-select: none;
+}
+body.sidebar-resize-active * { cursor: col-resize !important; }
 .navigator.collapsed .project-list,
 .navigator.collapsed .navigator-footer { display: none; }
 
@@ -482,7 +519,7 @@ code {
   cursor: pointer;
   transition: background 150ms ease, color 150ms ease;
 }
-.pin-button svg { width: 12px; height: 12px; }
+.pin-button svg { width: 15px; height: 15px; }
 .project-group:hover .project-card-actions,
 .project-group.selected .project-card-actions,
 .project-card-actions:focus-within,
@@ -496,7 +533,6 @@ code {
 .project-group.selected .pin-button:hover,
 .project-group.selected .complete-project-button:hover { color: #fff; background: rgb(255 255 255 / 20%); }
 .project-group.selected .pin-button.active { color: #fff; }
-.pinned-project-actions .pin-button svg { width: 15px; height: 15px; }
 .project-group.dragging {
   opacity: 0.28;
   filter: grayscale(0.4);
@@ -759,6 +795,12 @@ body.project-drag-active {
   gap: 28px;
   padding: 24px 30px 64px;
   overflow-y: auto;
+}
+
+.content > * {
+  width: 100%;
+  max-width: var(--content-max-width);
+  margin-inline: auto;
 }
 
 .demo-banner,
@@ -1451,7 +1493,6 @@ body.project-drag-active {
 
 @media (max-width: 1080px) {
   .global-meta span:nth-child(n + 6) { display: none; }
-  .dashboard { grid-template-columns: 220px minmax(0, 1fr); }
   .dashboard.sidebar-collapsed { grid-template-columns: 42px minmax(0, 1fr); }
   .task-repositories { display: none; }
   .content { padding-right: 22px; padding-left: 22px; }
@@ -1471,6 +1512,7 @@ body.project-drag-active {
   .toolbar select { width: 100%; min-width: 0; }
   .dashboard { display: block; }
   .navigator { height: auto; border-right: 0; border-bottom: 1px solid var(--rule); }
+  .navigator-resize-handle { display: none; }
   .navigator-head { padding-top: 10px; }
   .project-list {
     align-items: flex-start;

@@ -8,6 +8,11 @@ import type { TaskCounts, TaskStatus } from "./types";
 import { createAutoRefresh } from "./refresh";
 import { ownerLabel } from "./owner";
 import {
+  DEFAULT_SIDEBAR_WIDTH,
+  clampSidebarWidth,
+  parseStoredSidebarWidth,
+} from "./sidebar";
+import {
   applyZoom,
   readStoredZoom,
   zoomActionForShortcut,
@@ -15,6 +20,7 @@ import {
 } from "./zoom";
 
 const SIDEBAR_COLLAPSED_KEY = "taskboard:sidebar-collapsed";
+const SIDEBAR_WIDTH_KEY = "taskboard:sidebar-width";
 
 function readSidebarCollapsed(): boolean {
   try {
@@ -24,11 +30,22 @@ function readSidebarCollapsed(): boolean {
   }
 }
 
+function readSidebarWidth(): number {
+  try {
+    return parseStoredSidebarWidth(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+  } catch {
+    return DEFAULT_SIDEBAR_WIDTH;
+  }
+}
+
 const board = useBoardStore();
 const zoomScale = ref(readStoredZoom());
 const zoomNotice = ref("");
 const sidebarCollapsed = ref(readSidebarCollapsed());
+const sidebarWidth = ref(readSidebarWidth());
+const sidebarResizing = ref(false);
 let zoomNoticeTimer: number | undefined;
+let sidebarResize: { startX: number; startWidth: number } | null = null;
 const {
   snapshot,
   selectedProjectKey,
@@ -117,6 +134,59 @@ function toggleSidebar() {
   }
 }
 
+function persistSidebarWidth() {
+  try {
+    localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth.value));
+  } catch {
+    // 存储不可用时仍保留当前会话状态。
+  }
+}
+
+function setSidebarWidth(value: number, persist = false) {
+  sidebarWidth.value = clampSidebarWidth(value);
+  if (persist) persistSidebarWidth();
+}
+
+function removeSidebarResizeListeners() {
+  window.removeEventListener("pointermove", onSidebarResize);
+  window.removeEventListener("pointerup", stopSidebarResize);
+  window.removeEventListener("pointercancel", stopSidebarResize);
+}
+
+function startSidebarResize(event: PointerEvent) {
+  if (event.button !== 0 || sidebarCollapsed.value) return;
+  event.preventDefault();
+  sidebarResize = { startX: event.clientX, startWidth: sidebarWidth.value };
+  sidebarResizing.value = true;
+  document.body.classList.add("sidebar-resize-active");
+  window.addEventListener("pointermove", onSidebarResize, { passive: false });
+  window.addEventListener("pointerup", stopSidebarResize, { once: true });
+  window.addEventListener("pointercancel", stopSidebarResize, { once: true });
+}
+
+function onSidebarResize(event: PointerEvent) {
+  if (!sidebarResize) return;
+  event.preventDefault();
+  setSidebarWidth(sidebarResize.startWidth + event.clientX - sidebarResize.startX);
+}
+
+function stopSidebarResize() {
+  if (!sidebarResize) return;
+  sidebarResize = null;
+  sidebarResizing.value = false;
+  document.body.classList.remove("sidebar-resize-active");
+  removeSidebarResizeListeners();
+  persistSidebarWidth();
+}
+
+function resizeSidebarBy(delta: number) {
+  setSidebarWidth(sidebarWidth.value + delta, true);
+}
+
+function resizeSidebarTo(width: number) {
+  setSidebarWidth(width, true);
+}
+
 function showZoomNotice(message: string) {
   window.clearTimeout(zoomNoticeTimer);
   zoomNotice.value = message;
@@ -160,6 +230,10 @@ onBeforeUnmount(() => {
   document.removeEventListener("visibilitychange", onVisibilityChange);
   window.removeEventListener("keydown", onZoomShortcut);
   window.clearTimeout(zoomNoticeTimer);
+  sidebarResize = null;
+  sidebarResizing.value = false;
+  document.body.classList.remove("sidebar-resize-active");
+  removeSidebarResizeListeners();
 });
 </script>
 
@@ -221,13 +295,21 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <div class="dashboard" :class="{ 'sidebar-collapsed': sidebarCollapsed }">
+    <div
+      class="dashboard"
+      :class="{
+        'sidebar-collapsed': sidebarCollapsed,
+        'sidebar-resizing': sidebarResizing,
+      }"
+      :style="{ '--sidebar-width': `${sidebarWidth}px` }"
+    >
       <ProjectSidebar
         :projects="regularProjects"
         :pinned-projects="pinnedProjects"
         :archived-projects="archivedProjects"
         :selected-key="selectedProjectKey"
         :collapsed="sidebarCollapsed"
+        :sidebar-width="sidebarWidth"
         :pinned-keys="viewPrefs.pinned"
         :source="source"
         :database="snapshot?.db ?? null"
@@ -235,6 +317,9 @@ onBeforeUnmount(() => {
         @select="board.selectProject"
         @select-all="board.selectAllProjects"
         @toggle-collapse="toggleSidebar"
+        @resize-start="startSidebarResize"
+        @resize-by="resizeSidebarBy"
+        @resize-to="resizeSidebarTo"
         @focus-task="focusTask"
         @toggle-pin="board.togglePinned"
         @reorder="board.reorderProject"
