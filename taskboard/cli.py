@@ -8,10 +8,14 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
-from .gitref import head_sha
+from .gitref import (
+    commits_between, diff_argv, diff_numstat, dirty_files, head_sha, untracked_files,
+    worktree_for,
+)
 from .render import STATUS_LABEL, html_document, render, render_json
 from .store import BoardError, Store, home_dir, load_view_prefs, validate_markdown_newlines
 
@@ -444,6 +448,279 @@ def cmd_show(store: Store, args) -> int:
     return 0
 
 
+def _effective_range(entry: dict, status: str,
+                     committed_only: bool = False) -> tuple[str | None, str | None, bool, str]:
+    """在办任务比到工作区,这样改到一半也能审;已完成任务用记录的两个端点。
+
+    第四个返回值是该去哪个工作树看:在 worktree 里干活时,登记路径的工作区是别人的。
+    """
+    base, head = entry['base_sha'], entry['head_sha']
+    tree = str(worktree_for(entry['path']))
+    if base and not head and status == 'active' and not committed_only:
+        live = head_sha(tree)
+        if live:
+            return base, live, True, tree
+    return base, head, False, entry['path']
+
+
+def _range_label(base: str | None, head: str | None, live: bool) -> str:
+    if live:
+        return f'{base}..工作区(含未提交)'
+    if base and head:
+        return f'{base}..{head}'
+    return f'{base or "?"}..{head or "?"}(区间不完整)'
+
+
+CONCEPT_STATE_LABEL = {
+    'proposed': '待对齐', 'aligned': '已对齐', 'stale': '需重新对齐', 'rejected': '已否决',
+}
+CONCEPT_STATE_COLOR = {
+    'proposed': CYAN, 'aligned': '\033[32m', 'stale': '\033[33m', 'rejected': DIM,
+}
+
+
+def print_concept(entry: dict, verbose: bool = False) -> None:
+    state = paint(CONCEPT_STATE_LABEL[entry['state']], CONCEPT_STATE_COLOR[entry['state']])
+    scope = entry['repository'] or f'{entry["project"]}(需求概念)'
+    print(f'{paint("[" + str(entry["id"]) + "]", DIM)} {entry["title"]}  {state}'
+          f'  {paint(scope, DIM)}')
+    if verbose and entry['body']:
+        print(f'    {entry["body"]}')
+    if verbose and entry['files']:
+        anchors = '、'.join(
+            item['path'] + (f':{item["symbol"]}' if item['symbol'] else '')
+            for item in entry['files']
+        )
+        print(paint(f'    锚点 {anchors}', DIM))
+    if entry['state'] == 'stale':
+        moved = '、'.join(entry['moved']) or '锚点'
+        print(paint(f'    对齐于 {entry["aligned_commit"]},之后 {moved} 变过——只需重看这处',
+                    DIM))
+
+
+def cmd_concept(store: Store, args) -> int:
+    validate_markdown_newlines(args.why)
+    project = None
+    if args.project:
+        project = store.get_project(args.project)['key']
+    repository = args.repo
+    if not repository and args.file:
+        # 只有代码锚点非要落在某个仓库里;方法论概念不该被逼着挑一个仓库
+        candidates = store.project_repositories(project) if project else []
+        if len(candidates) != 1:
+            raise BoardError('传了 --file 且需求关联多个仓库,用 --repo 指明锚点在哪个仓库')
+        repository = candidates[0]['path']
+    entry = store.add_concept(
+        repository, args.title, body=args.why, files=args.file,
+        project=project, task_ref=args.task, category=args.category,
+    )
+    print_concept(entry, verbose=True)
+    print(paint(f'  等人确认:board align {entry["id"]}', DIM))
+    return 0
+
+
+def cmd_concepts(store: Store, args) -> int:
+    project = None if args.all_projects else resolve_project(store, args.project)
+    entries = store.concepts(
+        project=project, repository=args.repo, include_rejected=args.rejected,
+    )
+    if not entries:
+        print('还没有概念。board concept "一句话" --why "为什么选它" --file path:symbol')
+        return 0
+    for state in ('proposed', 'stale', 'aligned', 'rejected'):
+        group = [entry for entry in entries if entry['state'] == state]
+        if not group:
+            continue
+        print(paint(f'{CONCEPT_STATE_LABEL[state]} {len(group)}', BOLD))
+        for entry in group:
+            print_concept(entry, verbose=args.verbose or state in ('proposed', 'stale'))
+        print()
+    return 0
+
+
+def cmd_concept_edit(store: Store, args) -> int:
+    validate_markdown_newlines(args.why)
+    entry = store.update_concept(
+        args.id, title=args.title, body=args.why, files=args.file,
+        category=args.category, keep_aligned=args.keep_aligned,
+    )
+    print_concept(entry, verbose=True)
+    if entry.get('alignment_reset'):
+        print(paint('  措辞变了,已退回待对齐——你当初点头认的是旧那句话', DIM))
+        print(paint(f'  确实只是改说法就:board align {entry["id"]}', DIM))
+    return 0
+
+
+def cmd_align(store: Store, args) -> int:
+    if args.reject:
+        entry = store.reject_concept(args.id, args.reject)
+        print(f'已否决 [{entry["id"]}] {entry["title"]}')
+        print(paint(f'  理由 {args.reject}', DIM))
+        return 0
+    entry = store.align_concept(args.id, note=args.note)
+    print(f'已对齐 [{entry["id"]}] {entry["title"]}')
+    print(paint(f'  锚在 {entry["repository"]} {entry["aligned_commit"]},'
+                f'之后锚点文件动过会提示重新对齐', DIM))
+    return 0
+
+
+QUEUE_BUCKET = {
+    'align': ('必须先对齐', RED),
+    'read': ('精读', CYAN),
+    'skim': ('可跳过', DIM),
+}
+
+
+def cmd_review_queue(store: Store, args) -> int:
+    project = None if args.all_projects else resolve_project(store, args.project)
+    entries = store.review_queue(project=project, since_days=args.since)
+    if not entries:
+        print(f'近 {args.since} 天没有带提交区间的改动')
+        return 0
+    worth = [entry for entry in entries if entry['bucket'] != 'skim'][:args.limit]
+    skipped = [entry for entry in entries if entry not in worth]
+    print(paint(f'该读的 {len(worth)} 条(近 {args.since} 天共 {len(entries)} 个任务有改动)',
+                BOLD))
+    for bucket in ('align', 'read'):
+        group = [entry for entry in worth if entry['bucket'] == bucket]
+        if not group:
+            continue
+        label, color = QUEUE_BUCKET[bucket]
+        print(f'\n{paint(label, color)} {len(group)}')
+        for entry in group:
+            print(f'  #{entry["ref"]:<4}{entry["title"]}')
+            print(paint(f'       {entry["reason"]}', DIM))
+            print(paint(f'       {entry["files"]} 个文件 +{entry["added"]} −{entry["deleted"]}'
+                        f'  ·  board review {entry["ref"]} -p {entry["project"]}', DIM))
+    if skipped:
+        # 全量列表本身就是过载的一部分,可跳过的折成一行
+        refs = ' '.join(f'#{entry["ref"]}' for entry in skipped[:12])
+        more = f' 等 {len(skipped)} 条' if len(skipped) > 12 else ''
+        print(f'\n{paint("可跳过", DIM)} {refs}{more}')
+    return 0
+
+
+COMMIT_LIST_LIMIT = 10
+
+
+def _print_commits(tree: str, name: str, base: str | None, head: str | None,
+                   live: bool) -> None:
+    """先按提交读:分段是 Agent 已经付过的成本,合并成一块 diff 等于把它扔掉。"""
+    commits = commits_between(tree, base, head)
+    if commits is None:
+        return
+    if not commits:
+        if live:
+            print(paint(f'\n提交 {name} 0 个 — 改动都还没提交,先提交再审更省事', DIM))
+        return
+    print(f'\n{paint("提交", BOLD)} {name} {base}..{head}  {len(commits)} 个')
+    for commit in commits[:COMMIT_LIST_LIMIT]:
+        size = '合并' if commit['merge'] else f'+{commit["added"]} −{commit["deleted"]}'
+        print(f'  {commit["sha"]:<10}{size:<14}{commit["subject"]}')
+    if len(commits) > COMMIT_LIST_LIMIT:
+        print(paint(f'  还有 {len(commits) - COMMIT_LIST_LIMIT} 个提交', DIM))
+
+
+def cmd_review(store: Store, args) -> int:
+    if args.queue:
+        return cmd_review_queue(store, args)
+    if args.ref is None:
+        raise BoardError('要么给任务号看审查包,要么加 --queue 看今天该读什么')
+    project = resolve_project(store, args.project)
+    task = store.get_task(project, args.ref)
+    ranges = store.task_commits(project, args.ref, verify=True)
+    if args.diff:
+        shown = 0
+        for entry in ranges:
+            base, head, live, tree = _effective_range(entry, task['status'], args.committed)
+            if not (base and head) or entry.get('missing'):
+                continue
+            subprocess.run(
+                ['git', '-C', tree, 'diff', *diff_argv(base, head, live)], check=False,
+            )
+            shown += 1
+        if not shown:
+            raise BoardError('没有可用区间,无法出 diff;先看 board review 的说明')
+        return 0
+
+    print(f'{paint("#" + str(task["ref"]), BOLD)} {task["title"]}')
+    meta = [STATUS_LABEL[task['status']], f'P{task["priority"]}']
+    if task['owner']:
+        meta.append(f'@{task["owner"]}')
+    print(paint('  ' + ' · '.join(meta), DIM))
+    if task['accept']:
+        print(paint(f'  验收 {task["accept"]}', CYAN))
+    if task['detail']:
+        print(f'\n{paint("为什么做", BOLD)}\n{task["detail"]}')
+
+    if not ranges:
+        print(paint('\n无区间记录:任务没有关联仓库,或在提交区间功能上线前就完成了', DIM))
+        return 0
+
+    changed_paths: list[str] = []
+    starts = [entry['base_at'] for entry in ranges if entry['base_at']]
+    ends = [entry['head_at'] for entry in ranges if entry['head_at']]
+    for entry in ranges:
+        base, head, live, tree = _effective_range(entry, task['status'], args.committed)
+        label = _range_label(base, head, live)
+        files = diff_numstat(tree, base, head, against_worktree=live)
+        if entry.get('missing'):
+            gone = '、'.join(entry['missing'])
+            print(paint(f'\n改动 {entry["name"]} {label} — {gone} 已不在仓库里,无法出 diff', RED))
+            continue
+        _print_commits(tree, entry['name'], base, head, live)
+        if files is None:
+            print(paint(f'\n改动 {entry["name"]} {label} — 区间不可用', DIM))
+            continue
+        changed_paths.extend(item['path'] for item in files)
+        total_added = sum(item['added'] for item in files)
+        total_deleted = sum(item['deleted'] for item in files)
+        head_line = (f'\n{paint("改动", BOLD)} {entry["name"]} {label}  '
+                     f'{len(files)} 个文件 +{total_added} −{total_deleted}')
+        print(head_line)
+        ordered = sorted(files, key=lambda item: item['added'] + item['deleted'], reverse=True)
+        for item in ordered[:args.files]:
+            size = '二进制' if item['binary'] else f'+{item["added"]} −{item["deleted"]}'
+            print(f'  {size:<14}{item["path"]}')
+        if len(ordered) > args.files:
+            print(paint(f'  还有 {len(ordered) - args.files} 个文件,--files 看全部', DIM))
+        if live:
+            # 未跟踪文件单独列,不进上面的计数:那个数字是改动规模,是 C 层排序的输入,
+            # 不能随桌面上有什么临时文件波动。过滤已由 git 的 --exclude-standard 做掉。
+            fresh = untracked_files(tree)
+            if fresh:
+                print(paint(f'  未跟踪的新文件 {len(fresh)} 个(不计入上面的规模)', DIM))
+                for item in sorted(fresh, key=lambda x: x['added'], reverse=True)[:args.files]:
+                    size = '二进制' if item['binary'] else f'+{item["added"]}'
+                    print(paint(f'  {size:<14}{item["path"]}', DIM))
+
+    hits = store.link_notes_touching(project, changed_paths)
+    if hits:
+        print(f'\n{paint("关键文件", BOLD)}')
+        for note in hits:
+            print(f'  · {note["title"]}  {paint("[" + str(note["id"]) + "]", DIM)}')
+
+    window = store.notes_between(project, min(starts, default=None), max(ends, default=None))
+    if window['added'] or window['superseded']:
+        print(f'\n{paint("区间内结论", BOLD)}')
+        for note in window['added']:
+            print(f'  + [{note["id"]}] {note["title"]}')
+        for note in window['superseded']:
+            print(paint(f'  ↳ [{note["id"]}] {note["title"]} 已被 [{note["superseded_by"]}] 推翻',
+                        DIM))
+    return 0
+
+
+def _warn_uncommitted(store: Store, project: str, ref: int) -> None:
+    """完成时工作区还脏,说明这些改动不在区间里——这是唯一值得提醒的时刻。"""
+    for repository in store.task_repositories(project, ref):
+        dirty = dirty_files(worktree_for(repository['path']))
+        if dirty:
+            preview = '、'.join(dirty[:3]) + ('…' if len(dirty) > 3 else '')
+            print(paint(f'  ⚠ {repository["name"]} 有 {len(dirty)} 个文件未提交,'
+                        f'不在区间里:{preview}', RED))
+
+
 def _status_cmd(status: str):
     def handler(store: Store, args) -> int:
         project = resolve_project(store, args.project)
@@ -457,6 +734,8 @@ def _status_cmd(status: str):
                 print(paint(f'  验收条件:{task["accept"]}', CYAN))
             if status in ('active', 'done'):
                 print_task_commits(store, project, ref, status)
+            if status == 'done':
+                _warn_uncommitted(store, project, ref)
         if status == 'done' and sha and not store.task_repositories(project, args.refs[0]):
             print(paint(f'  记录完成时 HEAD {sha}(任务没有关联仓库)', DIM))
         if status == 'done':
@@ -526,7 +805,7 @@ def cmd_dep(store: Store, args) -> int:
     return 0
 
 
-NOTE_LABEL = {'finding': '结论', 'risk': '尾巴', 'link': '文件'}
+NOTE_LABEL = {'finding': '结论', 'risk': '尾巴', 'link': '文件', 'concept': '概念'}
 
 
 def _note_cmd(kind: str):
@@ -547,6 +826,17 @@ def _note_cmd(kind: str):
 
 def cmd_notes(store: Store, args) -> int:
     project = resolve_project(store, args.project)
+    # 概念按仓库列:同一仓库下别的需求提的概念,对这个需求同样有效,不该重新解释一遍
+    concepts = store.concepts(project=project)
+    pending = [entry for entry in concepts if entry['state'] in ('proposed', 'stale')]
+    if concepts:
+        aligned = len(concepts) - len(pending)
+        print(paint(f'概念 · 待你确认 {len(pending)} · 已对齐 {aligned}', BOLD))
+        for entry in pending:
+            print_concept(entry, verbose=args.verbose)
+        if pending:
+            print(paint('  board align <id> 确认,或 board align <id> --reject "理由"', DIM))
+        print()
     labels = {'finding': '约束性结论', 'risk': '尾巴与风险', 'link': '关键文件'}
     for kind, label in labels.items():
         notes = store._note_dicts(project, kind)
@@ -759,6 +1049,21 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument('--force', action='store_true', help='新路径当前不存在也照样登记')
     sp.set_defaults(func=cmd_repo_move)
 
+    sp = sub.add_parser(
+        'review', help='审查包(给任务号)或今天该读什么(--queue,按风险分诊)')
+    sp.add_argument('ref', type=int, nargs='?')
+    sp.add_argument('--queue', action='store_true',
+                    help='按风险排出今天该读的,主信号是有没有引入未对齐概念')
+    sp.add_argument('--since', type=int, default=1, metavar='天', help='看近几天(默认 1)')
+    sp.add_argument('--limit', type=int, default=5, help='最多列几条(默认 5)')
+    sp.add_argument('-A', '--all-projects', action='store_true')
+    sp.add_argument('--diff', action='store_true', help='直接出 git diff,渲染交给 git/delta')
+    sp.add_argument('--files', type=int, default=8, help='最多列几个文件(默认 8)')
+    sp.add_argument('--committed', action='store_true',
+                    help='只看已提交区间,在办任务也不比工作区')
+    add_project_flag(sp)
+    sp.set_defaults(func=cmd_review)
+
     sp = sub.add_parser('show', help='看单个任务')
     sp.add_argument('ref', type=int)
     add_project_flag(sp)
@@ -829,6 +1134,43 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument('--supersedes', help='推翻哪几条旧记录(id,逗号分隔);旧记录保留但标记失效')
         add_project_flag(sp)
         sp.set_defaults(func=_note_cmd(kind))
+
+    sp = sub.add_parser('concept', help='登记一个待人确认的概念(归属仓库,跨需求共享)')
+    sp.add_argument('title', help='一句话:是什么、解决什么问题')
+    sp.add_argument('--why', help='为什么选它、替代方案为何不用')
+    sp.add_argument('--file', action='append', metavar='PATH[:SYMBOL]',
+                    help='代码坐标,只给位置不贴代码;可重复传入')
+    sp.add_argument('--task', type=int, help='由哪个任务引入(每任务最多 3 个)')
+    sp.add_argument('--repo', help='属于哪个仓库(单仓库需求可省略)')
+    sp.add_argument('--category')
+    add_project_flag(sp)
+    sp.set_defaults(func=cmd_concept)
+
+    sp = sub.add_parser('concepts', help='列概念:待对齐/需重新对齐/已对齐')
+    sp.add_argument('-v', '--verbose', action='store_true')
+    sp.add_argument('--rejected', action='store_true', help='含已否决的')
+    sp.add_argument('--repo', help='只看某个仓库')
+    sp.add_argument('-A', '--all-projects', action='store_true')
+    add_project_flag(sp)
+    sp.set_defaults(func=cmd_concepts)
+
+    sp = sub.add_parser('concept-edit', help='改概念卡:追问后补充或修正措辞')
+    sp.add_argument('id', type=int)
+    sp.add_argument('--title')
+    sp.add_argument('--why')
+    sp.add_argument('--file', action='append', metavar='PATH[:SYMBOL]',
+                    help='替换全部代码锚点;可重复传入')
+    sp.add_argument('--category')
+    sp.add_argument('--keep-aligned', dest='keep_aligned', action='store_true',
+                    help='只改了说法、意思没变时保留已对齐状态')
+    sp.set_defaults(func=cmd_concept_edit)
+
+    sp = sub.add_parser('align', help='人确认理解了这个概念(或否决它)')
+    sp.add_argument('id', type=int)
+    sp.add_argument('--note', help='对齐时想补一句')
+    sp.add_argument('--reject', metavar='理由',
+                    help='否决:不算新概念,或方案本身不对')
+    sp.set_defaults(func=cmd_align)
 
     sp = sub.add_parser('notes', help='列结论/尾巴/文件(默认只列有效的)')
     sp.add_argument('-v', '--verbose', action='store_true')

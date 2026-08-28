@@ -191,6 +191,352 @@ def test_cli_start_and_done_print_commit_range(db, tmp_path, capsys):
     assert '改动 repo' in capsys.readouterr().out
 
 
+def _repo_with_commit(path, message='init'):
+    path.mkdir(parents=True, exist_ok=True)
+
+    def git(*argv):
+        subprocess.run(
+            ['git', '-C', str(path), '-c', 'user.email=t@t', '-c', 'user.name=t', *argv],
+            check=True, capture_output=True,
+        )
+
+    git('init', '-q')
+    (path / 'seed.txt').write_text('seed\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', message)
+    return git
+
+
+def test_cli_review_shows_range_files_and_window_notes(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    git = _repo_with_commit(repo)
+    assert run(db, 'init', 'rev', '--name', '审查', '--repo', str(repo)) == 0
+    assert run(db, 'add', '改点东西', '-p', 'rev', '--detail', '为了验证审查包',
+               '--accept', '能一屏看完') == 0
+    assert run(db, 'start', '1', '-p', 'rev') == 0
+    (repo / 'big.py').write_text('x = 1\n' * 30, encoding='utf-8')
+    (repo / 'small.py').write_text('y = 2\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '任务里的改动')
+    assert run(db, 'link', 'big.py', '-p', 'rev', '--body', '关键入口') == 0
+    assert run(db, 'done', '1', '-p', 'rev') == 0
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'rev') == 0
+    out = capsys.readouterr().out
+    assert '为了验证审查包' in out and '能一屏看完' in out
+    assert '2 个文件' in out
+    # 大文件排在前面:先看改得多的
+    assert out.index('big.py') < out.index('small.py')
+    assert '关键文件' in out          # link 命中被改的文件
+    assert '区间内结论' in out         # 区间内新增的记录
+
+
+def test_cli_review_of_active_task_includes_uncommitted_work(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    _repo_with_commit(repo)
+    assert run(db, 'init', 'wip', '--name', '在办', '--repo', str(repo)) == 0
+    assert run(db, 'add', '还没做完', '-p', 'wip') == 0
+    assert run(db, 'start', '1', '-p', 'wip') == 0
+    (repo / 'seed.txt').write_text('seed\nchanged\n', encoding='utf-8')
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'wip') == 0
+    out = capsys.readouterr().out
+    assert '工作区(含未提交)' in out
+    assert 'seed.txt' in out
+
+
+def test_cli_review_reports_unusable_range_instead_of_faking_one(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    git = _repo_with_commit(repo)
+    assert run(db, 'init', 'gone', '--name', '失效', '--repo', str(repo)) == 0
+    assert run(db, 'add', '会被改写', '-p', 'gone') == 0
+    assert run(db, 'start', '1', '-p', 'gone') == 0
+    git('commit', '-q', '--allow-empty', '-m', '原提交')
+    assert run(db, 'done', '1', '-p', 'gone') == 0
+    git('commit', '-q', '--allow-empty', '--amend', '-m', '改写后')
+    git('reflog', 'expire', '--expire=now', '--all')
+    git('gc', '-q', '--prune=now')
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'gone') == 0
+    out = capsys.readouterr().out
+    assert '已不在仓库里' in out and '个文件' not in out
+
+
+def test_cli_review_without_range_says_so(db, capsys):
+    assert run(db, 'init', 'bare', '--name', '没仓库') == 0
+    assert run(db, 'add', '没有关联仓库', '-p', 'bare') == 0
+    assert run(db, 'done', '1', '-p', 'bare') == 0
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'bare') == 0
+    assert '无区间记录' in capsys.readouterr().out
+
+
+def test_cli_review_caps_file_list(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    git = _repo_with_commit(repo)
+    assert run(db, 'init', 'many', '--name', '很多文件', '--repo', str(repo)) == 0
+    assert run(db, 'add', '改一堆', '-p', 'many') == 0
+    assert run(db, 'start', '1', '-p', 'many') == 0
+    for index in range(6):
+        (repo / f'f{index}.py').write_text(f'v = {index}\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '六个文件')
+    assert run(db, 'done', '1', '-p', 'many') == 0
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'many', '--files', '2') == 0
+    out = capsys.readouterr().out
+    assert '6 个文件' in out and '还有 4 个文件' in out
+
+
+def test_cli_review_lists_untracked_separately_and_respects_gitignore(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    _repo_with_commit(repo)
+    (repo / '.gitignore').write_text('noise/\n', encoding='utf-8')
+    assert run(db, 'init', 'fresh', '--name', '新文件', '--repo', str(repo)) == 0
+    assert run(db, 'add', '新建了文件', '-p', 'fresh') == 0
+    assert run(db, 'start', '1', '-p', 'fresh') == 0
+    (repo / 'seed.txt').write_text('seed\nchanged\n', encoding='utf-8')
+    (repo / 'brand_new.py').write_text('a = 1\nb = 2\n', encoding='utf-8')
+    (repo / 'noise').mkdir()
+    (repo / 'noise' / 'junk.tmp').write_text('垃圾\n', encoding='utf-8')
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'fresh') == 0
+    out = capsys.readouterr().out
+    assert 'brand_new.py' in out              # 未跟踪的新文件要看得见
+    assert '未跟踪的新文件' in out
+    assert 'junk.tmp' not in out              # 被 .gitignore 挡掉,不重做一套排除规则
+    # 规模只算已跟踪的改动:未跟踪文件不能让这个数字随桌面上的临时文件波动
+    assert '1 个文件' in out
+
+
+def test_cli_review_committed_flag_ignores_working_tree(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    _repo_with_commit(repo)
+    assert run(db, 'init', 'strict', '--name', '只看已提交', '--repo', str(repo)) == 0
+    assert run(db, 'add', '在办任务', '-p', 'strict') == 0
+    assert run(db, 'start', '1', '-p', 'strict') == 0
+    (repo / 'seed.txt').write_text('seed\n未提交的改动\n', encoding='utf-8')
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'strict', '--committed') == 0
+    out = capsys.readouterr().out
+    assert '工作区(含未提交)' not in out
+    assert '区间不完整' in out                 # 还没 done,没有终点,如实说
+
+
+def test_cli_review_lists_commits_before_merged_diffstat(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    git = _repo_with_commit(repo)
+    assert run(db, 'init', 'byc', '--name', '按提交读', '--repo', str(repo)) == 0
+    assert run(db, 'add', '分两步做', '-p', 'byc') == 0
+    assert run(db, 'start', '1', '-p', 'byc') == 0
+    (repo / 'first.py').write_text('a = 1\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '第一步:打地基')
+    (repo / 'second.py').write_text('b = 2\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '第二步:接上去')
+    assert run(db, 'done', '1', '-p', 'byc') == 0
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'byc') == 0
+    out = capsys.readouterr().out
+    assert '第一步:打地基' in out and '第二步:接上去' in out
+    # 提交列表在合并 diffstat 之前:先按提交读,合并数字只作总量参考
+    assert out.index('第二步:接上去') < out.index('2 个文件')
+
+
+def test_cli_review_nudges_to_commit_when_nothing_committed(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    _repo_with_commit(repo)
+    assert run(db, 'init', 'nudge', '--name', '还没提交', '--repo', str(repo)) == 0
+    assert run(db, 'add', '写了没提交', '-p', 'nudge') == 0
+    assert run(db, 'start', '1', '-p', 'nudge') == 0
+    (repo / 'seed.txt').write_text('seed\n改了\n', encoding='utf-8')
+    capsys.readouterr()
+
+    assert run(db, 'review', '1', '-p', 'nudge') == 0
+    assert '改动都还没提交' in capsys.readouterr().out
+
+
+def test_cli_done_warns_about_uncommitted_work(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    git = _repo_with_commit(repo)
+    assert run(db, 'init', 'dirty', '--name', '完成时还脏', '--repo', str(repo)) == 0
+    assert run(db, 'add', '做完但没提交干净', '-p', 'dirty') == 0
+    assert run(db, 'start', '1', '-p', 'dirty') == 0
+    (repo / 'done.py').write_text('x = 1\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '提交了一部分')
+    (repo / 'forgotten.py').write_text('y = 2\n', encoding='utf-8')
+    capsys.readouterr()
+
+    assert run(db, 'done', '1', '-p', 'dirty') == 0
+    out = capsys.readouterr().out
+    assert '未提交' in out and 'forgotten.py' in out
+
+
+def test_cli_done_stays_quiet_when_tree_is_clean(db, tmp_path, capsys):
+    repo = tmp_path / 'repo'
+    git = _repo_with_commit(repo)
+    assert run(db, 'init', 'clean', '--name', '干净收工', '--repo', str(repo)) == 0
+    assert run(db, 'add', '提交干净了', '-p', 'clean') == 0
+    assert run(db, 'start', '1', '-p', 'clean') == 0
+    (repo / 'done.py').write_text('x = 1\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '全提交了')
+    capsys.readouterr()
+
+    assert run(db, 'done', '1', '-p', 'clean') == 0
+    assert '未提交' not in capsys.readouterr().out
+
+
+def test_cli_concept_align_flow_across_projects(db, tmp_path, capsys):
+    repo = tmp_path / 'svc'
+    git = _repo_with_commit(repo)
+    assert run(db, 'init', 'alpha', '--name', '需求A', '--repo', str(repo)) == 0
+    assert run(db, 'init', 'beta', '--name', '需求B') == 0
+    assert run(db, 'set', '-p', 'beta', '--repo', str(repo)) == 0
+    assert run(db, 'add', '做点事', '-p', 'alpha') == 0
+    capsys.readouterr()
+
+    assert run(db, 'concept', '增量对账用水位线', '--why', '全量扫描随数据增长',
+               '--file', 'seed.txt', '--task', '1', '-p', 'alpha') == 0
+    out = capsys.readouterr().out
+    assert '待对齐' in out and '锚点 seed.txt' in out
+
+    # 另一个需求也看得到:概念归仓库,不归需求
+    assert run(db, 'concepts', '-p', 'beta') == 0
+    assert '增量对账用水位线' in capsys.readouterr().out
+    assert run(db, 'notes', '-p', 'beta') == 0
+    assert '待你确认 1' in capsys.readouterr().out
+
+    assert run(db, 'align', '1') == 0
+    assert '已对齐' in capsys.readouterr().out
+
+    (repo / 'seed.txt').write_text('seed\n改了锚点\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '动了锚点文件')
+    assert run(db, 'concepts', '-p', 'alpha') == 0
+    assert '需重新对齐' in capsys.readouterr().out
+
+
+def test_cli_concept_rejects_with_reason(db, tmp_path, capsys):
+    repo = tmp_path / 'svc'
+    _repo_with_commit(repo)
+    assert run(db, 'init', 'solo', '--name', '单需求', '--repo', str(repo)) == 0
+    assert run(db, 'concept', '可疑概念', '-p', 'solo') == 0
+    capsys.readouterr()
+
+    assert run(db, 'align', '1', '--reject', '这不算新概念') == 0
+    out = capsys.readouterr().out
+    assert '已否决' in out and '这不算新概念' in out
+    assert run(db, 'concepts', '-p', 'solo') == 0
+    assert '还没有概念' in capsys.readouterr().out
+
+
+def test_cli_concept_repo_is_required_only_for_code_anchors(db, tmp_path, capsys):
+    backend = tmp_path / 'backend'
+    frontend = tmp_path / 'frontend'
+    _repo_with_commit(backend)
+    _repo_with_commit(frontend)
+    assert run(db, 'init', 'multi', '--name', '跨仓库',
+               '--repo', str(backend), '--repo', str(frontend)) == 0
+    capsys.readouterr()
+
+    # 有代码锚点就必须说清锚在哪个仓库
+    assert run(db, 'concept', '带锚点的', '-p', 'multi', '--file', 'seed.txt') == 1
+    assert '--repo' in capsys.readouterr().err
+    assert run(db, 'concept', '带锚点的', '-p', 'multi',
+               '--file', 'seed.txt', '--repo', 'backend') == 0
+    capsys.readouterr()
+
+    # 方法论概念没有锚点,不该被逼着在两个仓库里挑一个
+    assert run(db, 'concept', 'KS 值只在同一时间窗内可比', '-p', 'multi') == 0
+    assert '需求概念' in capsys.readouterr().out
+
+
+def _queued(db, *extra):
+    """跑一次队列并把输出切成 (档位 -> 该档里的任务号)。"""
+    import io, contextlib
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        assert run(db, 'review', '--queue', *extra) == 0
+    return buffer.getvalue()
+
+
+def test_cli_review_queue_ranks_unaligned_concepts_first(db, tmp_path, capsys):
+    repo = tmp_path / 'svc'
+    git = _repo_with_commit(repo)
+    (repo / '.gitattributes').write_text('*.py diff=python\n', encoding='utf-8')
+    (repo / 'core.py').write_text(
+        'def sched():\n    return 1\n\n\ndef util():\n    return 2\n', encoding='utf-8')
+    (repo / 'render.py').write_text('def render():\n    return 3\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '基线')
+    assert run(db, 'init', 'q', '--name', '分诊', '--repo', str(repo)) == 0
+    assert run(db, 'link', 'render.py', '-p', 'q', '--body', '导出入口') == 0
+
+    # 引入新概念的任务
+    assert run(db, 'add', '重构调度器', '-p', 'q', '--accept', '旧接口不变') == 0
+    assert run(db, 'start', '1', '-p', 'q') == 0
+    assert run(db, 'concept', '调度改用时间轮', '--file', 'core.py:sched',
+               '--task', '1', '-p', 'q') == 0
+    (repo / 'core.py').write_text(
+        'def sched():\n    return 99\n\n\ndef util():\n    return 2\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '时间轮')
+    assert run(db, 'done', '1', '-p', 'q') == 0
+
+    # 只碰关键文件的任务
+    assert run(db, 'add', '改导出', '-p', 'q', '--accept', '不乱码') == 0
+    assert run(db, 'start', '2', '-p', 'q') == 0
+    (repo / 'render.py').write_text('def render():\n    return 33\n', encoding='utf-8')
+    git('add', '-A')
+    git('commit', '-q', '-m', '改导出')
+    assert run(db, 'done', '2', '-p', 'q') == 0
+    capsys.readouterr()
+
+    out = _queued(db, '-p', 'q')
+    assert '必须先对齐' in out and '调度改用时间轮' in out
+    assert out.index('#1') < out.index('#2')          # 未对齐概念排在关键文件前面
+    assert '触碰关键文件 render.py' in out
+
+    # 对齐之后 #1 掉出该读的队列——队列会因为人的动作而变短
+    assert run(db, 'align', '2') == 0
+    after = _queued(db, '-p', 'q')
+    assert '必须先对齐' not in after
+    assert '可跳过' in after and '#1' in after.split('可跳过')[1]
+
+
+def test_cli_review_queue_collapses_skippable_and_needs_a_target(db, tmp_path, capsys):
+    repo = tmp_path / 'svc'
+    git = _repo_with_commit(repo)
+    assert run(db, 'init', 'quiet', '--name', '安静', '--repo', str(repo)) == 0
+    for index in range(3):
+        assert run(db, 'add', f'小改动{index}', '-p', 'quiet', '--accept', '无回归') == 0
+        assert run(db, 'start', str(index + 1), '-p', 'quiet') == 0
+        (repo / f'f{index}.py').write_text('x = 1\n', encoding='utf-8')
+        git('add', '-A')
+        git('commit', '-q', '-m', f'改动{index}')
+        assert run(db, 'done', str(index + 1), '-p', 'quiet') == 0
+    capsys.readouterr()
+
+    out = _queued(db, '-p', 'quiet')
+    # 全量列表本身就是过载的一部分:可跳过的折成一行
+    assert '该读的 0 条' in out
+    assert out.count('可跳过') == 1
+
+    assert run(db, 'review', '-p', 'quiet') == 1
+    assert '--queue' in capsys.readouterr().err
+
+
 def test_cli_export_html_and_json(db, tmp_path, capsys):
     repo = tmp_path / 'repo'
     repo.mkdir()

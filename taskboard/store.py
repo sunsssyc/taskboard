@@ -12,14 +12,20 @@ import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .gitref import has_commit, head_sha
+from .gitref import diff_numstat, has_commit, moved_anchors, worktree_head_sha
 
 # waiting = 卡在人工/外部动作上(服务器执行、页面操作、等发版),我推不动;
 # 与"被依赖阻塞"是两回事,前者等的是人,后者等的是别的任务。
 STATUSES = ('todo', 'active', 'waiting', 'done', 'dropped')
 OPEN_STATUSES = ('todo', 'active', 'waiting')
 ACTIONABLE_STATUSES = ('todo', 'active')
-NOTE_KINDS = ('finding', 'risk', 'link')
+NOTE_KINDS = ('finding', 'risk', 'link', 'concept')
+# 概念卡三层递进,人读到够为止:标题一句话说是什么,正文说为什么选它,锚点给代码坐标。
+# 长度上限本身就是防过载机制——概念卡必须比它解释的改动短,否则它就是第二堵墙。
+CONCEPT_TITLE_LIMIT = 60
+CONCEPT_BODY_LIMIT = 400
+# 一个任务要用超过 3 个新概念时,这本身是信号:任务太大,或方案太聪明。
+TASK_CONCEPT_LIMIT = 3
 AGENT_PROVIDERS = ('codex', 'claude')
 AGENT_RUN_STATUSES = ('submitted', 'opened', 'failed')
 PRIORITIES = (0, 1, 2, 3)
@@ -166,15 +172,34 @@ CREATE TABLE IF NOT EXISTS deps (
     blocked_by_id INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
     PRIMARY KEY (task_id, blocked_by_id)
 );
+-- concept 有两种作用域。带 repository_id 的是代码概念:记"这套代码是怎么回事",在该
+-- 仓库的所有关联需求间共享,锚点被改动会转 stale。repository_id 为空的是需求概念:
+-- 方法论、领域惯例这类不挂在某段代码上的东西,按 project 共享,不随代码失效。
+-- finding/risk 记的是"推进某个目标时做的判断",始终属于需求。
 CREATE TABLE IF NOT EXISTS notes (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    project     TEXT NOT NULL REFERENCES projects(key) ON DELETE CASCADE,
-    kind        TEXT NOT NULL,
-    category    TEXT,
-    title       TEXT NOT NULL,
-    body        TEXT,
-    metric      TEXT,
-    created_at  TEXT NOT NULL
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    project        TEXT NOT NULL REFERENCES projects(key) ON DELETE CASCADE,
+    kind           TEXT NOT NULL,
+    category       TEXT,
+    title          TEXT NOT NULL,
+    body           TEXT,
+    metric         TEXT,
+    repository_id  INTEGER REFERENCES repositories(id) ON DELETE CASCADE,
+    task_id        INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+    aligned_at     TEXT,
+    aligned_commit TEXT,
+    rejected_at    TEXT,
+    created_at     TEXT NOT NULL
+);
+-- 记录锚定的代码坐标。link 与 concept 共用:link 现在把路径写在标题里,没法可靠 join,
+-- 迁进来之后"这次改动碰了哪些关键文件/概念"才是真的查表而不是字符串前缀匹配。
+CREATE TABLE IF NOT EXISTS note_files (
+    note_id       INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+    repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    path          TEXT NOT NULL,
+    -- 空串表示"整个文件",不用 NULL:复合主键里 NULL 互不相等,会放进重复行
+    symbol        TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (note_id, repository_id, path, symbol)
 );
 -- superseded_by:被哪条记录推翻(NULL=当前有效)。旧结论不删除,保留
 -- "曾经这么认为、被什么推翻"这条信息,防止在同一问题上反复改判。
@@ -192,6 +217,7 @@ CREATE INDEX IF NOT EXISTS idx_task_repositories_repo ON task_repositories(repos
 CREATE INDEX IF NOT EXISTS idx_task_commits_repo ON task_commits(repository_id);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_task ON agent_runs(task_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_notes_project ON notes(project, kind);
+CREATE INDEX IF NOT EXISTS idx_note_files_repo ON note_files(repository_id, path);
 CREATE INDEX IF NOT EXISTS idx_events_at ON events(at DESC);
 """
 
@@ -225,7 +251,16 @@ class Store:
         """就地补列:老库直接用新版本打开即可,不需要单独的迁移命令。"""
         self._add_columns('notes', {
             'category': 'TEXT', 'superseded_by': 'INTEGER', 'superseded_at': 'TEXT',
+            'repository_id': 'INTEGER REFERENCES repositories(id) ON DELETE CASCADE',
+            'task_id': 'INTEGER REFERENCES tasks(id) ON DELETE SET NULL',
+            'aligned_at': 'TEXT', 'aligned_commit': 'TEXT', 'rejected_at': 'TEXT',
         })
+        # 索引建在补列之后:老库里 notes 表已存在,SCHEMA 的 CREATE TABLE 是空操作,
+        # 那时 repository_id 还没补上,索引写在 SCHEMA 里会直接报 no such column
+        self.conn.execute(
+            'CREATE INDEX IF NOT EXISTS idx_notes_repository ON notes(repository_id, kind)'
+        )
+        self._rebuild_note_files_pk()
         self._add_columns('tasks', {
             'accept': 'TEXT', 'branch': 'TEXT', 'pr': 'TEXT',
             'priority': f'INTEGER NOT NULL DEFAULT {DEFAULT_PRIORITY}',
@@ -251,6 +286,30 @@ class Store:
                 'SELECT id, ? FROM tasks WHERE project = ?',
                 (repository_id, project['key']),
             )
+
+    def _rebuild_note_files_pk(self) -> None:
+        """把 note_files 主键从 (note_id, repo, path) 升到带 symbol 的四列。
+
+        旧主键让一个文件只能锚一个函数,而概念常常要同时指向同一文件里的两处。
+        表是新加的、行数很少,直接搬一次比留个补丁便宜。
+        """
+        columns = list(self.conn.execute('PRAGMA table_info(note_files)'))
+        if not columns or any(row['name'] == 'symbol' and row['pk'] for row in columns):
+            return
+        self.conn.executescript("""
+            ALTER TABLE note_files RENAME TO note_files_old;
+            CREATE TABLE note_files (
+                note_id       INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                repository_id INTEGER NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+                path          TEXT NOT NULL,
+                symbol        TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (note_id, repository_id, path, symbol)
+            );
+            INSERT OR IGNORE INTO note_files (note_id, repository_id, path, symbol)
+                SELECT note_id, repository_id, path, COALESCE(symbol, '')
+                FROM note_files_old;
+            DROP TABLE note_files_old;
+        """)
 
     def close(self) -> None:
         self.conn.close()
@@ -654,7 +713,7 @@ class Store:
         captured: dict[str, str] = {}
         stamp = now_iso()
         for repository in repositories:
-            sha = head_sha(repository['path'])
+            sha = worktree_head_sha(repository['path'])
             if not sha:
                 continue
             existing = self.conn.execute(
@@ -1011,6 +1070,427 @@ class Store:
             row['is_superseded'] = row['superseded_by'] is not None
         return sorted(rows, key=lambda row: (row['is_superseded'], row['id']))
 
+    # ── 概念对齐 ────────────────────────────────────────────────────────
+    def _note_files(self, note_id: int) -> list[dict]:
+        return [dict(row) for row in self.conn.execute(
+            'SELECT r.name AS repository, r.path AS repository_path, f.path, f.symbol '
+            'FROM note_files f JOIN repositories r ON r.id = f.repository_id '
+            'WHERE f.note_id = ? ORDER BY f.path', (note_id,),
+        )]
+
+    def _concept_row(self, note_id: int) -> sqlite3.Row:
+        row = self.conn.execute(
+            "SELECT * FROM notes WHERE id = ? AND kind = 'concept'", (note_id,),
+        ).fetchone()
+        if row is None:
+            raise BoardError(f'没有编号 {note_id} 的概念')
+        return row
+
+    def add_concept(self, repository: str | None, title: str, body: str | None = None,
+                    files: list[str] | None = None, project: str | None = None,
+                    task_ref: int | None = None, category: str | None = None) -> dict:
+        """登记一个待对齐的概念。
+
+        传了 repository 就是代码概念:归那个仓库,在它的所有关联需求间共享,锚点动了会
+        转 stale。不传就是需求概念:方法论、领域惯例这类不挂在某段代码上的东西,归需求,
+        不随代码失效——强行给它挑一个仓库只会让归属变成掷骰子。
+        """
+        title = (title or '').strip()
+        self._check_concept_text(title, body)
+        repo = self.find_repository(repository) if repository else None
+        if repo is None and files:
+            raise BoardError('传了 --file 就要指明仓库:代码锚点必须落在某个仓库里')
+        if repo is None and not project:
+            raise BoardError('需求概念要用 -p 指明属于哪个需求')
+        owner = project or self._project_for_repository(repo['id'])
+        task_id = None
+        if task_ref is not None:
+            task = self.get_task(owner, task_ref)
+            task_id = task['id']
+            used = self.conn.execute(
+                "SELECT COUNT(*) FROM notes WHERE kind = 'concept' AND task_id = ? "
+                'AND rejected_at IS NULL', (task_id,),
+            ).fetchone()[0]
+            if used >= TASK_CONCEPT_LIMIT:
+                raise BoardError(
+                    f'#{task_ref} 已经有 {used} 个待对齐概念,上限 {TASK_CONCEPT_LIMIT} 个。'
+                    '要么这个任务该拆,要么方案绕了远路——先说清楚为什么需要更多'
+                )
+        stamp = now_iso()
+        cursor = self.conn.execute(
+            'INSERT INTO notes (project, kind, category, title, body, repository_id,'
+            ' task_id, created_at) VALUES (?,?,?,?,?,?,?,?)',
+            (owner, 'concept', category, title, body,
+             repo['id'] if repo else None, task_id, stamp),
+        )
+        note_id = int(cursor.lastrowid)
+        if repo:
+            self._replace_note_files(note_id, repo['id'], files or [])
+        self.log_event('concept_added', project=owner, task_ref=task_ref, note_id=note_id,
+                       repository=repo['name'] if repo else None, title=title)
+        self.conn.commit()
+        return self.concept(note_id)
+
+    def _project_for_repository(self, repository_id: int) -> str:
+        rows = list(self.conn.execute(
+            'SELECT project FROM project_repositories WHERE repository_id = ? ORDER BY project',
+            (repository_id,),
+        ))
+        if not rows:
+            raise BoardError('这个仓库还没关联任何需求,先 board init --repo 或 board set --repo')
+        return rows[0]['project']
+
+    def concept(self, note_id: int, check_stale: bool = True) -> dict:
+        return self._concept_dict(self._concept_row(note_id), check_stale=check_stale)
+
+    def _concept_dict(self, row: sqlite3.Row, check_stale: bool = True) -> dict:
+        entry = dict(row)
+        entry['files'] = self._note_files(row['id'])
+        repo = self.conn.execute(
+            'SELECT name, path FROM repositories WHERE id = ?', (row['repository_id'],),
+        ).fetchone() if row['repository_id'] else None
+        entry['repository'] = repo['name'] if repo else None
+        entry['repository_path'] = repo['path'] if repo else None
+        entry['moved'] = []
+        entry['state'] = self._concept_state(entry, check_stale=check_stale)
+        return entry
+
+    def _concept_state(self, entry: dict, check_stale: bool = True) -> str:
+        """proposed(待对齐) / aligned(已对齐) / stale(锚点动过,要重新确认) / rejected。
+
+        stale 与 proposed 分开:曾经对齐过只需重新确认变化的部分,从没对齐过要从头解释,
+        两者要读的量差一个量级。
+        """
+        if entry['rejected_at']:
+            return 'rejected'
+        if not entry['aligned_at']:
+            return 'proposed'
+        if not check_stale:
+            return 'aligned'
+        if not (entry['files'] and entry['repository_path'] and entry['aligned_commit']):
+            return 'aligned'
+        # 记下动的是哪个锚点:只让人重看变了的那一处,而不是把整张卡重念一遍
+        entry['moved'] = moved_anchors(
+            entry['repository_path'], entry['aligned_commit'], entry['files'],
+        )
+        return 'stale' if entry['moved'] else 'aligned'
+
+    def concepts(self, project: str | None = None, repository: str | None = None,
+                 include_rejected: bool = False, check_stale: bool = True) -> list[dict]:
+        """按仓库取概念:同一仓库下的概念对所有关联需求可见,不按 project 过滤。"""
+        scopes: list[str] = []
+        args: list = []
+        if repository:
+            repository_ids = [self.find_repository(repository)['id']]
+        elif project:
+            repository_ids = [row['id'] for row in self.project_repositories(project)]
+            # 需求概念没有仓库,按 project 取:方法论不该因为需求换了仓库就看不见
+            scopes.append('(repository_id IS NULL AND project = ?)')
+            args.append(project)
+        else:
+            repository_ids = [row['id'] for row in self.repositories()]
+            scopes.append('repository_id IS NULL')
+        if repository_ids:
+            scopes.append(
+                f'repository_id IN ({",".join("?" for _ in repository_ids)})')
+            args.extend(repository_ids)
+        if not scopes:
+            return []
+        sql = (f"SELECT * FROM notes WHERE kind = 'concept' "
+               f'AND ({" OR ".join(scopes)})')
+        if not include_rejected:
+            sql += ' AND rejected_at IS NULL'
+        rows = self.conn.execute(sql + ' ORDER BY id', args)
+        return [self._concept_dict(row, check_stale=check_stale) for row in rows]
+
+    def align_concept(self, note_id: int, note: str | None = None) -> dict:
+        """人确认理解了。锚在当前提交上,之后锚点文件再动就转 stale。"""
+        row = self._concept_row(note_id)
+        if row['rejected_at']:
+            raise BoardError(f'概念 {note_id} 已被否决,不能再对齐')
+        repo = self.conn.execute(
+            'SELECT path, name FROM repositories WHERE id = ?', (row['repository_id'],),
+        ).fetchone() if row['repository_id'] else None
+        # 需求概念没有仓库,也就没有锚:它不随代码失效,不记 commit
+        commit = worktree_head_sha(repo['path']) if repo else None
+        self.conn.execute(
+            'UPDATE notes SET aligned_at = ?, aligned_commit = ? WHERE id = ?',
+            (now_iso(), commit, note_id),
+        )
+        self.log_event('concept_aligned', project=row['project'], note_id=note_id,
+                       commit=commit, note=note)
+        self.conn.commit()
+        return self.concept(note_id)
+
+    def reject_concept(self, note_id: int, reason: str) -> dict:
+        """否决。理由进事件流,这样"提了多少、被否了多少"可查——否决率高说明粒度不对。"""
+        reason = (reason or '').strip()
+        if not reason:
+            raise BoardError('否决要给理由:是不算新概念,还是方案本身不对')
+        row = self._concept_row(note_id)
+        self.conn.execute(
+            'UPDATE notes SET rejected_at = ?, aligned_at = NULL, aligned_commit = NULL'
+            ' WHERE id = ?', (now_iso(), note_id),
+        )
+        self.log_event('concept_rejected', project=row['project'], note_id=note_id,
+                       reason=reason)
+        self.conn.commit()
+        return self.concept(note_id, check_stale=False)
+
+    def _check_concept_text(self, title: str | None, body: str | None) -> None:
+        if title is not None:
+            if not title.strip():
+                raise BoardError('概念要有一句话标题:说清是什么、解决什么问题')
+            if len(title) > CONCEPT_TITLE_LIMIT:
+                raise BoardError(
+                    f'概念标题 {len(title)} 字,上限 {CONCEPT_TITLE_LIMIT} 字——'
+                    '一句话说不清就说明还没想清楚'
+                )
+        if body and len(body) > CONCEPT_BODY_LIMIT:
+            raise BoardError(
+                f'概念正文 {len(body)} 字,上限 {CONCEPT_BODY_LIMIT} 字——'
+                '概念卡必须比它解释的改动短,否则它就是第二堵墙'
+            )
+
+    def _replace_note_files(self, note_id: int, repository_id: int,
+                            files: list[str]) -> None:
+        self.conn.execute('DELETE FROM note_files WHERE note_id = ?', (note_id,))
+        for token in files:
+            path, _, symbol = token.partition(':')
+            path = path.strip().lstrip('./')
+            if not path:
+                continue
+            self.conn.execute(
+                'INSERT OR IGNORE INTO note_files (note_id, repository_id, path, symbol)'
+                ' VALUES (?,?,?,?)', (note_id, repository_id, path, symbol.strip()),
+            )
+
+    def update_concept(self, note_id: int, title: str | None = None,
+                       body: str | None = None, files: list[str] | None = None,
+                       category: str | None = None, keep_aligned: bool = False) -> dict:
+        """改概念卡。概念卡本来就该在追问中被修正,不该只能删了重提。
+
+        改了措辞就退回待对齐:人当初点头认的是旧那句话,换了说法等于还没看过。
+        改锚点不退回——概念没变,只是位置说得更准了,失效与否由锚点自己算。
+        """
+        row = self._concept_row(note_id)
+        if row['rejected_at']:
+            raise BoardError(f'概念 {note_id} 已被否决;改主意就新提一张卡,别翻旧账')
+        self._check_concept_text(title, body)
+        changed: list[str] = []
+        sets, args = [], []
+        for field, value in (('title', title), ('body', body), ('category', category)):
+            if value is None:
+                continue
+            if (row[field] or '') == value:
+                continue
+            sets.append(f'{field} = ?')
+            args.append(value)
+            changed.append(field)
+        reset = bool({'title', 'body'} & set(changed)) and row['aligned_at'] and not keep_aligned
+        if reset:
+            sets.extend(['aligned_at = NULL', 'aligned_commit = NULL'])
+        if sets:
+            self.conn.execute(f'UPDATE notes SET {", ".join(sets)} WHERE id = ?',
+                              [*args, note_id])
+        if files is not None:
+            if not row['repository_id']:
+                raise BoardError('需求概念没有仓库,加不了代码锚点;要锚代码就新提一张仓库概念')
+            self._replace_note_files(note_id, row['repository_id'], files)
+            changed.append('files')
+        if not changed:
+            raise BoardError('没有要改的内容:传 --title / --why / --file / --category')
+        self.log_event('concept_updated', project=row['project'], note_id=note_id,
+                       fields=sorted(changed), realigned=bool(reset))
+        self.conn.commit()
+        entry = self.concept(note_id)
+        entry['alignment_reset'] = bool(reset)
+        return entry
+
+    def concepts_in_range(self, repository_id: int, repo_path: str,
+                          base: str | None, head: str | None) -> list[dict]:
+        """这段区间动过哪些概念的锚点。
+
+        必须按锚点粒度判,不能按文件:概念锚在 core.py:util 上,而这次只改了
+        core.py:sched,那它就不该被算进来——否则同一个文件里所有概念都会被牵连,
+        队列的主信号立刻退化成"这次碰了哪些文件"。
+        """
+        if not (base and head):
+            return []
+        hits = []
+        for entry in self.concepts(check_stale=False):
+            if entry['repository_id'] != repository_id or not entry['files']:
+                continue
+            moved = moved_anchors(repo_path, base, entry['files'], until=head)
+            if moved:
+                entry['moved'] = moved
+                hits.append(entry)
+        return hits
+
+    def concepts_proposed_by(self, task_id: int) -> list[dict]:
+        """这个任务提出来的概念——"引入了新概念"最直接的证据,不用问 git。"""
+        rows = self.conn.execute(
+            "SELECT * FROM notes WHERE kind = 'concept' AND task_id = ? "
+            'AND rejected_at IS NULL ORDER BY id', (task_id,),
+        )
+        return [self._concept_dict(row, check_stale=False) for row in rows]
+
+    # ── 审查分诊 ────────────────────────────────────────────────────────
+    def _queue_candidates(self, project: str | None, since_days: int) -> list[sqlite3.Row]:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat(
+            timespec='seconds')
+        sql = ('SELECT t.* FROM tasks t JOIN task_commits c ON c.task_id = t.id '
+               'WHERE COALESCE(c.head_at, t.updated_at) >= ?')
+        args: list = [cutoff]
+        if project:
+            sql += ' AND t.project = ?'
+            args.append(project)
+        sql += ' GROUP BY t.id ORDER BY COALESCE(MAX(c.head_at), t.updated_at) DESC'
+        return list(self.conn.execute(sql, args))
+
+    def review_queue(self, project: str | None = None, since_days: int = 1) -> list[dict]:
+        """按风险给改动分诊。
+
+        主信号是"有没有引入你还没对齐的概念",不是改动规模:800 行但全落在已对齐概念内的
+        改动扫一眼就够,30 行但引入一个新调度语义的必须精读。规模只是次级信号。
+        """
+        entries = []
+        for task in self._queue_candidates(project, since_days):
+            ranges = self.task_commits(task['project'], task['ref'])
+            changed: dict[int, list[str]] = {}
+            touched_repos: dict[int, dict] = {}
+            files = added = deleted = 0
+            for entry in ranges:
+                repository = self.conn.execute(
+                    'SELECT id, path FROM repositories WHERE path = ?', (entry['path'],),
+                ).fetchone()
+                stat = diff_numstat(entry['path'], entry['base_sha'], entry['head_sha'])
+                if not stat or repository is None:
+                    continue
+                changed.setdefault(repository['id'], []).extend(
+                    item['path'] for item in stat)
+                touched_repos[repository['id']] = {
+                    'path': entry['path'], 'base': entry['base_sha'],
+                    'head': entry['head_sha'],
+                }
+                files += len(stat)
+                added += sum(item['added'] for item in stat)
+                deleted += sum(item['deleted'] for item in stat)
+            # 这个任务自己提的概念,是"引入了新概念"最直接的证据
+            unaligned = [
+                concept for concept in self.concepts_proposed_by(task['id'])
+                if not concept['aligned_at']
+            ]
+            seen = {concept['id'] for concept in unaligned}
+            # 还有一类:改动动了别人已对齐概念的锚点,那份理解也该重新确认。
+            # 但要以概念自己的对齐点为准:如果人是在这次改动之后才对齐的,他已经看过
+            # 新代码了,再拉出来就是重复劳动。所以只认当前确实是 stale 的。
+            for repository_id, entry in touched_repos.items():
+                for concept in self.concepts_in_range(
+                    repository_id, entry['path'], entry['base'], entry['head'],
+                ):
+                    if concept['id'] in seen or not concept['aligned_at']:
+                        continue
+                    if self.concept(concept['id'])['state'] != 'stale':
+                        continue
+                    concept['state'] = 'stale'
+                    unaligned.append(concept)
+                    seen.add(concept['id'])
+            all_paths = [path for paths in changed.values() for path in paths]
+            key_files = self.link_notes_touching(task['project'], all_paths)
+            window = self.notes_between(
+                task['project'],
+                min((entry['base_at'] for entry in ranges if entry['base_at']), default=None),
+                max((entry['head_at'] for entry in ranges if entry['head_at']), default=None),
+            )
+            entries.append(self._triage({
+                'project': task['project'], 'ref': task['ref'], 'title': task['title'],
+                'status': task['status'], 'gate': bool(task['gate']),
+                'accept': task['accept'], 'repositories': len(ranges),
+                'files': files, 'added': added, 'deleted': deleted,
+                'unaligned': unaligned, 'key_files': key_files,
+                'superseded': window['superseded'],
+            }))
+        order = {'align': 0, 'read': 1, 'skim': 2}
+        entries.sort(key=lambda item: (order[item['bucket']], -item['weight']))
+        return entries
+
+    @staticmethod
+    def _triage(entry: dict) -> dict:
+        """三档 + 一行理由。理由要说得出为什么,否则人没法判断该不该信这个排序。"""
+        reasons: list[str] = []
+        weight = 0
+        if entry['unaligned']:
+            names = '、'.join(f'[{c["id"]}] {c["title"]}' for c in entry['unaligned'][:2])
+            reasons.append(f'引入未对齐概念 {names}')
+            weight += 100 * len(entry['unaligned'])
+        if entry['key_files']:
+            hit = '、'.join(note['title'] for note in entry['key_files'][:2])
+            reasons.append(f'触碰关键文件 {hit}')
+            weight += 40
+        if entry['gate']:
+            reasons.append('闸门任务')
+            weight += 30
+        if entry['superseded']:
+            reasons.append(f'期间推翻了 {len(entry["superseded"])} 条结论')
+            weight += 25
+        if not (entry['accept'] or '').strip():
+            reasons.append('没有验收条件,无法判断是否兑现')
+            weight += 20
+        if entry['repositories'] > 1:
+            reasons.append(f'跨 {entry["repositories"]} 个仓库')
+            weight += 15
+        churn = entry['added'] + entry['deleted']
+        if churn >= 400:
+            reasons.append(f'改动 {churn} 行')
+            weight += 10
+        if entry['unaligned']:
+            bucket = 'align'
+        elif weight >= 20:
+            bucket = 'read'
+        else:
+            bucket = 'skim'
+            reasons = reasons or ['只碰已对齐概念,规模不大']
+        entry['bucket'] = bucket
+        entry['weight'] = weight
+        entry['reason'] = ' · '.join(reasons)
+        return entry
+
+    def notes_between(self, project: str, start: str | None,
+                      end: str | None) -> dict[str, list[dict]]:
+        """区间内新增的记录、以及区间内被推翻的记录。
+
+        回答的是"做这个任务期间判定了什么、改判了什么",按时间戳而不是按任务归属——
+        记录本来就不挂任务,硬加归属会让人在写 finding 时多一个必须想清楚的问题。
+        """
+        def window(column: str) -> list[dict]:
+            sql = f'SELECT * FROM notes WHERE project = ? AND {column} IS NOT NULL'
+            args: list = [project]
+            if start:
+                sql += f' AND {column} >= ?'
+                args.append(start)
+            if end:
+                sql += f' AND {column} <= ?'
+                args.append(end)
+            return [dict(row) for row in self.conn.execute(sql + ' ORDER BY id', args)]
+
+        return {'added': window('created_at'), 'superseded': window('superseded_at')}
+
+    def link_notes_touching(self, project: str, paths: list[str]) -> list[dict]:
+        """改到的文件命中了哪些 link 记录。
+
+        link 现在把路径写在标题里(32 条中只有 17 条像路径),所以只能按前缀匹配;
+        note_files 落地后换成真正的 join,见任务 #40。
+        """
+        hits = []
+        for note in self.notes(project, 'link'):
+            title = (note['title'] or '').strip().strip('/')
+            if not title:
+                continue
+            if any(path == title or path.startswith(title + '/') for path in paths):
+                hits.append(dict(note))
+        return hits
+
     @staticmethod
     def _order_by_dependency(tasks: list[dict]) -> list[dict]:
         """按依赖拓扑排序,让列表读起来就是执行顺序。
@@ -1136,9 +1616,17 @@ class Store:
         note_args: list = [like, like]
         if project:
             task_sql += ' AND project = ?'
-            note_sql += ' AND project = ?'
             task_args.append(project)
-            note_args.append(project)
+            # 概念归属仓库,project 只是出处:按需求搜也要能搜到同仓库下别的需求提的概念
+            repository_ids = [row['id'] for row in self.project_repositories(project)]
+            if repository_ids:
+                placeholders = ','.join('?' for _ in repository_ids)
+                note_sql += (f" AND (project = ? OR (kind = 'concept'"
+                             f' AND repository_id IN ({placeholders})))')
+                note_args.extend([project, *repository_ids])
+            else:
+                note_sql += ' AND project = ?'
+                note_args.append(project)
         task_sql += ' ORDER BY project, ref'
         note_sql += ' ORDER BY project, id'
         return {

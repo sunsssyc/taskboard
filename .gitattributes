@@ -1,0 +1,9 @@
+# 让 git 认得函数边界:diff 的 @@ 行会带上函数名,board 的概念锚点也能按函数
+# 判失效(git log -L :symbol:path),而不是整个文件一动就说对齐失效。
+*.py     diff=python
+*.rs     diff=rust
+*.ts     diff=typescript
+*.swift  diff=swift
+*.html   diff=html
+*.css    diff=css
+*.md     diff=markdown

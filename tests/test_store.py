@@ -372,6 +372,305 @@ def test_task_without_repository_records_no_range(store):
     store.set_status('demo', task['ref'], 'done')
     assert store.task_commits('demo', task['ref']) == []
 
+def test_range_follows_the_worktree_the_command_runs_in(store, tmp_path, monkeypatch):
+    """Agent 常在 git worktree 里干活,起点必须是那棵树的 HEAD,不是主检出的。"""
+    main = _git_repo(tmp_path / 'main')
+    _git(main, 'commit', '-q', '--allow-empty', '-m', '主检出又走了一步')
+    linked = tmp_path / 'linked'
+    _git(main, 'worktree', 'add', '-q', '--detach', str(linked), 'HEAD~1')
+    store.create_project('wt', '工作树', repositories=[str(main)])
+    task = store.add_task('wt', '在工作树里做')
+
+    monkeypatch.chdir(linked)
+    store.set_status('wt', task['ref'], 'active')
+
+    entry = store.task_commits('wt', task['ref'])[0]
+    assert entry['base_sha'] == _head(linked)
+    assert entry['base_sha'] != _head(main)
+
+
+def test_range_ignores_cwd_belonging_to_another_repository(store, tmp_path, monkeypatch):
+    """只认同一个仓库的另一棵工作树;换个仓库就退回登记路径,不重蹈按 cwd 乱取的覆辙。"""
+    target = _git_repo(tmp_path / 'target')
+    stranger = _git_repo(tmp_path / 'stranger')
+    _git(stranger, 'commit', '-q', '--allow-empty', '-m', '无关仓库的提交')
+    store.create_project('iso', '隔离', repositories=[str(target)])
+    task = store.add_task('iso', '在别的仓库里执行')
+
+    monkeypatch.chdir(stranger)
+    store.set_status('iso', task['ref'], 'active')
+
+    entry = store.task_commits('iso', task['ref'])[0]
+    assert entry['base_sha'] == _head(target)
+    assert entry['base_sha'] != _head(stranger)
+
+@pytest.fixture()
+def shared(store, tmp_path):
+    """一个仓库、两个需求——概念共享的最小场景。"""
+    repo = _git_repo(tmp_path / 'svc')
+    (repo / 'sync.py').write_text('def sync(): pass\n', encoding='utf-8')
+    (repo / 'api.py').write_text('def api(): pass\n', encoding='utf-8')
+    _git(repo, 'add', '-A')
+    _git(repo, 'commit', '-q', '-m', '基线')
+    store.create_project('alpha', '需求A', repositories=[str(repo)])
+    store.create_project('beta', '需求B', repositories=[str(repo)])
+    return repo
+
+
+def test_concept_belongs_to_repository_and_is_shared_across_projects(store, shared):
+    concept = store.add_concept(
+        str(shared), '增量对账用水位线', body='全量扫描随数据增长', files=['sync.py:sync'],
+        project='alpha',
+    )
+
+    assert concept['repository'] == 'svc'
+    assert concept['state'] == 'proposed'
+    assert [item['path'] for item in concept['files']] == ['sync.py']
+    # 出处是 alpha,但 beta 同样看得到——不必重新解释一遍
+    assert [entry['id'] for entry in store.concepts(project='beta')] == [concept['id']]
+    assert [entry['id'] for entry in store.concepts(project='alpha')] == [concept['id']]
+
+
+def test_concept_length_caps_are_enforced(store, shared):
+    with pytest.raises(BoardError, match='上限'):
+        store.add_concept(str(shared), '很长的标题' * 15, project='alpha')
+    with pytest.raises(BoardError, match='第二堵墙'):
+        store.add_concept(str(shared), '正常标题', body='啰嗦' * 300, project='alpha')
+    with pytest.raises(BoardError, match='一句话'):
+        store.add_concept(str(shared), '   ', project='alpha')
+
+
+def test_task_can_introduce_at_most_three_concepts(store, shared):
+    task = store.add_task('alpha', '一个任务')
+    for index in range(3):
+        store.add_concept(str(shared), f'概念{index}', project='alpha', task_ref=task['ref'])
+
+    with pytest.raises(BoardError, match='该拆'):
+        store.add_concept(str(shared), '第四个', project='alpha', task_ref=task['ref'])
+
+    # 被否决的不占额度:否决说明它本来就不该算一个概念
+    rejected = store.concepts(project='alpha')[0]
+    store.reject_concept(rejected['id'], '这不算新概念')
+    assert store.add_concept(str(shared), '补位的', project='alpha', task_ref=task['ref'])
+
+
+def test_alignment_goes_stale_only_when_anchors_move(store, shared):
+    concept = store.add_concept(
+        str(shared), '水位线', files=['sync.py'], project='alpha',
+    )
+    aligned = store.align_concept(concept['id'])
+    assert aligned['state'] == 'aligned'
+    assert aligned['aligned_commit'] == _head(shared)
+
+    (shared / 'api.py').write_text('def api(): return 1\n', encoding='utf-8')
+    _git(shared, 'add', '-A')
+    _git(shared, 'commit', '-q', '-m', '改了别的文件')
+    assert store.concept(concept['id'])['state'] == 'aligned'
+
+    (shared / 'sync.py').write_text('def sync(): return 1\n', encoding='utf-8')
+    _git(shared, 'add', '-A')
+    _git(shared, 'commit', '-q', '-m', '改了锚点文件')
+    assert store.concept(concept['id'])['state'] == 'stale'
+
+    # 重新对齐后锚到新提交,回到 aligned
+    assert store.align_concept(concept['id'])['state'] == 'aligned'
+
+
+def test_rejecting_a_concept_requires_a_reason_and_lands_in_the_event_log(store, shared):
+    concept = store.add_concept(str(shared), '可疑的概念', project='alpha')
+    with pytest.raises(BoardError, match='理由'):
+        store.reject_concept(concept['id'], '  ')
+
+    store.reject_concept(concept['id'], '方案本身不对')
+
+    assert store.concept(concept['id'])['state'] == 'rejected'
+    assert store.concepts(project='alpha') == []
+    payloads = [event['payload'] or '' for event in store.events(limit=10)]
+    assert any('方案本身不对' in payload for payload in payloads)
+    with pytest.raises(BoardError, match='已被否决'):
+        store.align_concept(concept['id'])
+
+
+def test_concepts_in_range_matches_by_anchor_not_by_file(store, symbol_repo):
+    """概念锚在 core.py:util 上、这次只改了 core.py:sched,就不该被算进来。
+
+    按文件判会让同一文件里所有概念都被牵连,队列的主信号立刻退化成"碰了哪些文件"。
+    """
+    about_sched = store.add_concept(
+        str(symbol_repo), '调度用时间轮', files=['core.py:sync'], project='sym')
+    about_unrelated = store.add_concept(
+        str(symbol_repo), 'unrelated 是纯函数', files=['core.py:unrelated'], project='sym')
+    repository_id = store.find_repository(str(symbol_repo))['id']
+    base = _head(symbol_repo)
+    _rewrite(symbol_repo, sync_body='99', message='只改 sync')
+    head = _head(symbol_repo)
+
+    hits = store.concepts_in_range(repository_id, str(symbol_repo), base, head)
+
+    assert [entry['id'] for entry in hits] == [about_sched['id']]
+    assert about_unrelated['id'] not in [entry['id'] for entry in hits]
+
+
+def test_concepts_proposed_by_task_lists_unaligned_ones(store, shared):
+    task = store.add_task('alpha', '引入新概念的任务')
+    proposed = store.add_concept(
+        str(shared), '新概念', project='alpha', task_ref=task['ref'])
+    store.add_concept(str(shared), '无关概念', project='alpha')
+
+    assert [entry['id'] for entry in store.concepts_proposed_by(task['id'])] == [
+        proposed['id']]
+
+
+def test_search_finds_concepts_proposed_under_another_project(store, shared):
+    store.add_concept(str(shared), '水位线增量对账', project='alpha')
+
+    found = store.search('水位线', project='beta')['notes']
+
+    assert [note['title'] for note in found] == ['水位线增量对账']
+
+@pytest.fixture()
+def symbol_repo(store, tmp_path):
+    """一个文件两个函数——检验失效判定的粒度。"""
+    repo = _git_repo(tmp_path / 'svc')
+    (repo / '.gitattributes').write_text('*.py diff=python\n', encoding='utf-8')
+    (repo / 'core.py').write_text(
+        'def sync():\n    return 1\n\n\ndef unrelated():\n    return 2\n', encoding='utf-8')
+    _git(repo, 'add', '-A')
+    _git(repo, 'commit', '-q', '-m', '基线')
+    store.create_project('sym', '粒度', repositories=[str(repo)])
+    return repo
+
+
+def _rewrite(repo, sync_body='1', unrelated_body='2', message='改动'):
+    (repo / 'core.py').write_text(
+        f'def sync():\n    return {sync_body}\n\n\n'
+        f'def unrelated():\n    return {unrelated_body}\n', encoding='utf-8')
+    _git(repo, 'add', '-A')
+    _git(repo, 'commit', '-q', '-m', message)
+
+
+def test_symbol_anchor_ignores_changes_to_other_functions(store, symbol_repo):
+    by_symbol = store.add_concept(
+        str(symbol_repo), '按函数锚', files=['core.py:sync'], project='sym')
+    by_file = store.add_concept(
+        str(symbol_repo), '按文件锚', files=['core.py'], project='sym')
+    store.align_concept(by_symbol['id'])
+    store.align_concept(by_file['id'])
+
+    _rewrite(symbol_repo, unrelated_body='999', message='只改 unrelated')
+
+    # 同一个文件、同一次提交:按文件锚的被误报,按函数锚的不该动
+    assert store.concept(by_symbol['id'])['state'] == 'aligned'
+    assert store.concept(by_file['id'])['state'] == 'stale'
+
+
+def test_symbol_anchor_goes_stale_and_names_what_moved(store, symbol_repo):
+    concept = store.add_concept(
+        str(symbol_repo), '按函数锚', files=['core.py:sync'], project='sym')
+    store.align_concept(concept['id'])
+
+    _rewrite(symbol_repo, sync_body='42', message='改了 sync')
+
+    stale = store.concept(concept['id'])
+    assert stale['state'] == 'stale'
+    # 指出动的是哪一处:只重看这处,不用把整张卡重念一遍
+    assert stale['moved'] == ['core.py:sync']
+
+
+def test_unknown_symbol_falls_back_to_whole_file(store, symbol_repo):
+    """git 认不出函数时宁可多提醒,也不能漏报成"还对齐着"。"""
+    concept = store.add_concept(
+        str(symbol_repo), '锚了个不存在的函数', files=['core.py:no_such_function'],
+        project='sym')
+    store.align_concept(concept['id'])
+
+    _rewrite(symbol_repo, unrelated_body='999', message='只改 unrelated')
+
+    stale = store.concept(concept['id'])
+    assert stale['state'] == 'stale'
+    assert stale['moved'] == ['core.py']
+
+def test_editing_wording_sends_a_concept_back_for_realignment(store, shared):
+    concept = store.add_concept(
+        str(shared), '措辞有歧义的标题', body='原来的理由', files=['sync.py:sync'],
+        project='alpha')
+    store.align_concept(concept['id'])
+
+    edited = store.update_concept(concept['id'], title='改清楚之后的标题')
+
+    # 人当初点头认的是旧那句话,换了说法等于还没看过
+    assert edited['state'] == 'proposed'
+    assert edited['alignment_reset'] is True
+    assert edited['aligned_commit'] is None
+
+
+def test_keep_aligned_survives_a_pure_rewording(store, shared):
+    concept = store.add_concept(str(shared), '原标题', project='alpha')
+    store.align_concept(concept['id'])
+
+    edited = store.update_concept(concept['id'], title='意思一样的新标题', keep_aligned=True)
+
+    assert edited['state'] == 'aligned'
+    assert edited['alignment_reset'] is False
+
+
+def test_editing_anchors_keeps_alignment_and_allows_two_symbols_per_file(store, shared):
+    concept = store.add_concept(
+        str(shared), '锚点会变的概念', files=['sync.py:sync'], project='alpha')
+    store.align_concept(concept['id'])
+
+    edited = store.update_concept(concept['id'], files=['sync.py:sync', 'sync.py:helper'])
+
+    # 概念本身没变,只是位置说得更准了
+    assert edited['state'] == 'aligned'
+    # 旧主键 (note_id, repo, path) 只放得下一行,同一文件的两个函数会被吃掉
+    assert sorted(item['symbol'] for item in edited['files']) == ['helper', 'sync']
+
+
+def test_rejected_concept_cannot_be_edited(store, shared):
+    concept = store.add_concept(str(shared), '会被否决的', project='alpha')
+    store.reject_concept(concept['id'], '不算新概念')
+
+    with pytest.raises(BoardError, match='新提一张卡'):
+        store.update_concept(concept['id'], title='还想抢救一下')
+
+
+def test_empty_edit_is_rejected(store, shared):
+    concept = store.add_concept(str(shared), '不动的概念', project='alpha')
+    with pytest.raises(BoardError, match='没有要改的内容'):
+        store.update_concept(concept['id'])
+
+
+def test_workstream_concept_needs_no_repository_and_never_goes_stale(store, shared):
+    """方法论、领域惯例这类概念不挂在某段代码上,强行挑一个仓库只会让归属变成掷骰子。"""
+    method = store.add_concept(
+        None, 'KS 值只在同一时间窗内可比', body='不同窗的样本分布不同', project='alpha')
+    code = store.add_concept(
+        str(shared), '对账走水位线', files=['sync.py'], project='alpha')
+    store.align_concept(method['id'])
+    store.align_concept(code['id'])
+
+    assert method['repository'] is None
+    assert store.concept(method['id'])['aligned_commit'] is None
+
+    (shared / 'sync.py').write_text('def sync(): return 1\n', encoding='utf-8')
+    _git(shared, 'add', '-A')
+    _git(shared, 'commit', '-q', '-m', '改了代码')
+
+    assert store.concept(code['id'])['state'] == 'stale'
+    assert store.concept(method['id'])['state'] == 'aligned'
+    # 需求概念按 project 归属:列在该需求下,但不属于 beta
+    assert method['id'] in [entry['id'] for entry in store.concepts(project='alpha')]
+    assert method['id'] not in [entry['id'] for entry in store.concepts(project='beta')]
+
+
+def test_workstream_concept_rejects_code_anchors(store, shared):
+    with pytest.raises(BoardError, match='代码锚点必须落在某个仓库里'):
+        store.add_concept(None, '方法论', files=['sync.py'], project='alpha')
+    method = store.add_concept(None, '方法论', project='alpha')
+    with pytest.raises(BoardError, match='加不了代码锚点'):
+        store.update_concept(method['id'], files=['sync.py'])
+
 def test_dropped_tasks_are_not_actionable(store):
     task = store.add_task('demo', '放弃的')
     store.set_status('demo', task['ref'], 'dropped')
