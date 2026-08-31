@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { storeToRefs } from "pinia";
 import ProjectSidebar from "./components/ProjectSidebar.vue";
 import ProjectWorkspace from "./components/ProjectWorkspace.vue";
@@ -7,6 +7,7 @@ import { useBoardStore } from "./stores/board";
 import type { TaskCounts, TaskStatus } from "./types";
 import { createAutoRefresh } from "./refresh";
 import { ownerLabel } from "./owner";
+import type { BoardReference, BoardReferenceRequest } from "./references";
 import {
   DEFAULT_SIDEBAR_WIDTH,
   clampSidebarWidth,
@@ -45,8 +46,10 @@ const zoomNotice = ref("");
 const sidebarCollapsed = ref(readSidebarCollapsed());
 const sidebarWidth = ref(readSidebarWidth());
 const sidebarResizing = ref(false);
+const focusReferenceRequest = ref<(BoardReferenceRequest & { projectKey: string }) | null>(null);
 let zoomNoticeTimer: number | undefined;
 let sidebarResize: { startX: number; startWidth: number } | null = null;
+let referenceRequestToken = 0;
 const {
   snapshot,
   selectedProjectKey,
@@ -117,6 +120,17 @@ function resetFilters() {
   query.value = "";
   statusFilter.value = "";
   ownerFilter.value = "";
+}
+
+async function focusReference(projectKey: string, reference: BoardReference) {
+  resetFilters();
+  focusReferenceRequest.value = null;
+  await nextTick();
+  focusReferenceRequest.value = {
+    ...reference,
+    projectKey,
+    token: ++referenceRequestToken,
+  };
 }
 
 function focusTask(ref: number) {
@@ -376,7 +390,11 @@ onBeforeUnmount(() => {
             :links="board.filteredLinks(project)"
             :query="query"
             :single-project="Boolean(selectedProjectKey)"
+            :focus-reference="focusReferenceRequest?.projectKey === project.key
+              ? focusReferenceRequest
+              : null"
             @show-all="board.selectAllProjects"
+            @reference="focusReference(project.key, $event)"
           />
 
           <div v-if="!displayProjects.length" class="center-state compact-empty">

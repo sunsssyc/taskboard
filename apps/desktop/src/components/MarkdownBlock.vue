@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
+import ReferenceText from "./ReferenceText.vue";
+import type { BoardReference } from "../references";
 
 type InlinePart = { kind: "text" | "strong" | "code"; text: string };
 type Block = {
@@ -8,7 +10,16 @@ type Block = {
   parts: InlinePart[];
 };
 
-const props = defineProps<{ text: string }>();
+const props = withDefaults(defineProps<{
+  text: string;
+  taskRefs?: number[];
+  noteRefs?: number[];
+}>(), {
+  taskRefs: () => [],
+  noteRefs: () => [],
+});
+
+defineEmits<{ reference: [reference: BoardReference] }>();
 
 function inlineParts(value: string): InlinePart[] {
   const parts: InlinePart[] = [];
@@ -53,9 +64,22 @@ const blocks = computed(() => props.text.split("\n").map(parseLine));
         <span v-if="block.marker" class="markdown-marker">{{ block.marker }}</span>
         <span>
           <template v-for="(part, partIndex) in block.parts" :key="partIndex">
-            <strong v-if="part.kind === 'strong'">{{ part.text }}</strong>
+            <strong v-if="part.kind === 'strong'">
+              <ReferenceText
+                :text="part.text"
+                :task-refs="taskRefs"
+                :note-refs="noteRefs"
+                @activate="$emit('reference', $event)"
+              />
+            </strong>
             <code v-else-if="part.kind === 'code'">{{ part.text }}</code>
-            <template v-else>{{ part.text }}</template>
+            <ReferenceText
+              v-else
+              :text="part.text"
+              :task-refs="taskRefs"
+              :note-refs="noteRefs"
+              @activate="$emit('reference', $event)"
+            />
           </template>
         </span>
       </div>

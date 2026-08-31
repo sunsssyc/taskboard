@@ -876,6 +876,28 @@ body.project-drag-active {
   line-height: 1.58;
   overflow-wrap: anywhere;
 }
+.reference-link {
+  display: inline;
+  padding: 0 1px;
+  border: 0;
+  border-radius: 3px;
+  color: var(--accent);
+  font: inherit;
+  line-height: inherit;
+  text-decoration: underline;
+  text-decoration-color: rgb(0 122 255 / 30%);
+  text-underline-offset: 2px;
+  background: transparent;
+  cursor: pointer;
+}
+.reference-link:hover {
+  text-decoration-color: currentColor;
+  background: rgb(0 122 255 / 8%);
+}
+.reference-link:focus-visible {
+  outline: 2px solid rgb(0 122 255 / 38%);
+  outline-offset: 1px;
+}
 .project-heading-meta {
   display: flex;
   min-width: 0;
@@ -930,6 +952,7 @@ body.project-drag-active {
 }
 .task-row.flash { animation: task-flash 1.2s ease-out; }
 .task-row.status-active.flash { animation: task-flash 1.2s ease-out; }
+.note-row.flash { animation: task-flash 1.2s ease-out; }
 
 .task-row-head {
   display: flex;

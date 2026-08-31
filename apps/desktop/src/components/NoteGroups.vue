@@ -9,7 +9,9 @@ import {
   watch,
 } from "vue";
 import MarkdownBlock from "./MarkdownBlock.vue";
+import ReferenceText from "./ReferenceText.vue";
 import { buildNoteSheets } from "../noteSheets";
+import type { BoardReference } from "../references";
 import type { BoardNote } from "../types";
 
 const props = defineProps<{
@@ -18,11 +20,16 @@ const props = defineProps<{
   risks: BoardNote[];
   links: BoardNote[];
   query: string;
+  taskRefs: number[];
+  noteRefs: number[];
 }>();
+
+defineEmits<{ reference: [reference: BoardReference] }>();
 
 const openNotes = reactive(new Set<number>());
 const activeSheetId = ref("");
 const sheetTabs = ref<HTMLElement | null>(null);
+const rootElement = ref<HTMLElement | null>(null);
 let resizeObserver: ResizeObserver | null = null;
 let layoutFrame = 0;
 const sheets = computed(() => buildNoteSheets(props.findings, props.risks, props.links));
@@ -120,10 +127,33 @@ function moveSheet(event: KeyboardEvent, currentIndex: number, delta: number) {
   const nextIndex = (currentIndex + delta + length) % length;
   void selectAdjacentSheet(event, nextIndex);
 }
+
+function flashTarget(target: HTMLElement) {
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  target.classList.remove("flash");
+  window.requestAnimationFrame(() => target.classList.add("flash"));
+  window.setTimeout(() => target.classList.remove("flash"), 1250);
+}
+
+async function revealNote(id: number): Promise<boolean> {
+  const sheet = sheets.value.find((item) => item.notes.some((note) => note.id === id));
+  if (!sheet) return false;
+
+  activeSheetId.value = sheet.id;
+  openNotes.add(id);
+  await nextTick();
+
+  const target = rootElement.value?.querySelector<HTMLElement>(`.note-row[data-note-id="${id}"]`);
+  if (!target) return false;
+  flashTarget(target);
+  return true;
+}
+
+defineExpose({ revealNote });
 </script>
 
 <template>
-  <section v-if="sheets.length" class="notes-panel">
+  <section v-if="sheets.length" ref="rootElement" class="notes-panel">
     <div class="sheet-tab-bar">
       <div
         ref="sheetTabs"
@@ -177,6 +207,7 @@ function moveSheet(event: KeyboardEvent, currentIndex: number, delta: number) {
           :key="note.id"
           class="note-row"
           :class="{ open: isOpen(note), superseded: note.is_superseded }"
+          :data-note-id="note.id"
         >
           <button
             type="button"
@@ -190,9 +221,21 @@ function moveSheet(event: KeyboardEvent, currentIndex: number, delta: number) {
             <span v-if="note.metric" class="note-metric">{{ note.metric }}</span>
           </button>
           <div v-if="isOpen(note)" class="note-body">
-            <MarkdownBlock v-if="note.body" :text="note.body" />
+            <MarkdownBlock
+              v-if="note.body"
+              :text="note.body"
+              :task-refs="taskRefs"
+              :note-refs="noteRefs"
+              @reference="$emit('reference', $event)"
+            />
             <div v-if="note.supersedes.length" class="supersedes">
-              推翻了 {{ note.supersedes.map((id) => `[${id}]`).join("、") }}
+              推翻了
+              <ReferenceText
+                :text="note.supersedes.map((id) => `[${id}]`).join('、')"
+                :task-refs="taskRefs"
+                :note-refs="noteRefs"
+                @activate="$emit('reference', $event)"
+              />
             </div>
           </div>
         </article>

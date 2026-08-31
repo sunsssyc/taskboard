@@ -42,7 +42,7 @@ export const demoSnapshot: BoardSnapshot = {
       name: "任务看板工具迭代",
       repo: null,
       repositories: [{ name: "taskboard", path: "/Users/demo/taskboard" }],
-      summary: "让 Agent 可以更换，但目标、进度、结论和下一步持续保留。",
+      summary: "让 Agent 可以更换；当前主线 #26，交互原则见 [172]，Markdown 支持见 #12。",
       artifact_url: null,
       archived: false,
       counts: { todo: 4, active: 1, waiting: 1, done: 2, dropped: 0 },
@@ -53,7 +53,7 @@ export const demoSnapshot: BoardSnapshot = {
           26,
           "验证 Tauri + Vue 桌面只读 POC",
           "active",
-          "**目标**：保留 Python CLI 与 SQLite，用 Vue 重做桌面展示层。\n\n- 接入真实 `board export --json`\n- 验证搜索、折叠和启动速度",
+          "**目标**：保留 Python CLI 与 SQLite，用 Vue 重做桌面展示层。\n\n- 接入真实 `board export --json`\n- 验证搜索、折叠和启动速度\n- 交互口径参照 [172]~[175]",
           {
             priority: 0,
             branch: "codex/tauri-vue-poc",

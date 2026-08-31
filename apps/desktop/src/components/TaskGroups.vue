@@ -1,10 +1,19 @@
 <script setup lang="ts">
-import { computed, reactive } from "vue";
+import { computed, nextTick, reactive, ref } from "vue";
 import TaskRow from "./TaskRow.vue";
 import { sortTasksByPriority } from "../priority";
+import type { BoardReference } from "../references";
 import type { BoardTask } from "../types";
 
-const props = defineProps<{ tasks: BoardTask[]; projectKey: string; query: string }>();
+const props = defineProps<{
+  tasks: BoardTask[];
+  projectKey: string;
+  query: string;
+  taskRefs: number[];
+  noteRefs: number[];
+}>();
+
+defineEmits<{ reference: [reference: BoardReference] }>();
 
 const expandedGroups = reactive<Record<string, boolean>>({
   ready: false,
@@ -12,6 +21,8 @@ const expandedGroups = reactive<Record<string, boolean>>({
   dropped: false,
   done: false,
 });
+const rootElement = ref<HTMLElement | null>(null);
+const focusedTaskRef = ref<number | null>(null);
 
 const actionableTasks = computed(() =>
   sortTasksByPriority(props.tasks.filter((task) => task.actionable)),
@@ -50,10 +61,44 @@ const archiveGroups = computed(() => [
 function groupOpen(key: string): boolean {
   return Boolean(props.query.trim()) || expandedGroups[key];
 }
+
+function flashTarget(target: HTMLElement) {
+  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  target.classList.remove("flash");
+  window.requestAnimationFrame(() => target.classList.add("flash"));
+  window.setTimeout(() => target.classList.remove("flash"), 1250);
+}
+
+async function revealTask(ref: number): Promise<boolean> {
+  const task = props.tasks.find((item) => item.ref === ref);
+  if (!task) return false;
+
+  if (foldedActionableTasks.value.some((item) => item.ref === ref)) {
+    expandedGroups.ready = true;
+  } else if (task.status === "todo" && !task.actionable) {
+    expandedGroups.blocked = true;
+  } else if (task.status === "dropped") {
+    expandedGroups.dropped = true;
+  } else if (task.status === "done") {
+    expandedGroups.done = true;
+  }
+
+  focusedTaskRef.value = null;
+  await nextTick();
+  focusedTaskRef.value = ref;
+  await nextTick();
+
+  const target = rootElement.value?.querySelector<HTMLElement>(`.task-row[data-ref="${ref}"]`);
+  if (!target) return false;
+  flashTarget(target);
+  return true;
+}
+
+defineExpose({ revealTask });
 </script>
 
 <template>
-  <div v-if="tasks.length" class="task-spine">
+  <div v-if="tasks.length" ref="rootElement" class="task-spine">
     <TaskRow
       v-for="(task, index) in shownActionableTasks"
       :key="`${task.ref}:${task.title}`"
@@ -61,6 +106,10 @@ function groupOpen(key: string): boolean {
       :project-key="projectKey"
       :query="query"
       :initially-expanded="index === 0"
+      :focus-requested="focusedTaskRef === task.ref"
+      :task-refs="taskRefs"
+      :note-refs="noteRefs"
+      @reference="$emit('reference', $event)"
     />
 
     <section v-if="foldedActionableTasks.length" class="archive-group priority-overflow">
@@ -81,6 +130,10 @@ function groupOpen(key: string): boolean {
           :task="task"
           :project-key="projectKey"
           :query="query"
+          :focus-requested="focusedTaskRef === task.ref"
+          :task-refs="taskRefs"
+          :note-refs="noteRefs"
+          @reference="$emit('reference', $event)"
         />
       </div>
     </section>
@@ -92,6 +145,10 @@ function groupOpen(key: string): boolean {
       :project-key="projectKey"
       :query="query"
       :initially-expanded="shownActionableTasks.length === 0 && index === 0"
+      :focus-requested="focusedTaskRef === task.ref"
+      :task-refs="taskRefs"
+      :note-refs="noteRefs"
+      @reference="$emit('reference', $event)"
     />
 
     <section
@@ -116,6 +173,10 @@ function groupOpen(key: string): boolean {
           :task="task"
           :project-key="projectKey"
           :query="query"
+          :focus-requested="focusedTaskRef === task.ref"
+          :task-refs="taskRefs"
+          :note-refs="noteRefs"
+          @reference="$emit('reference', $event)"
         />
       </div>
     </section>

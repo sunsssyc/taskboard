@@ -5,6 +5,7 @@ import MarkdownBlock from "./MarkdownBlock.vue";
 import { useBoardStore } from "../stores/board";
 import { OWNER_OPTIONS, ownerLabel } from "../owner";
 import { PRIORITY_OPTIONS } from "../priority";
+import type { BoardReference } from "../references";
 import type { AgentProvider, BoardTask, TaskOwner, TaskPriority, TaskStatus } from "../types";
 
 const props = withDefaults(defineProps<{
@@ -12,7 +13,18 @@ const props = withDefaults(defineProps<{
   projectKey: string;
   query: string;
   initiallyExpanded?: boolean;
-}>(), { initiallyExpanded: false });
+  focusRequested?: boolean;
+  taskRefs?: number[];
+  noteRefs?: number[];
+}>(), {
+  initiallyExpanded: false,
+  focusRequested: false,
+  taskRefs: () => [],
+  noteRefs: () => [],
+});
+
+defineEmits<{ reference: [reference: BoardReference] }>();
+
 const board = useBoardStore();
 const expanded = ref(props.initiallyExpanded);
 const rootElement = ref<HTMLElement | null>(null);
@@ -22,10 +34,25 @@ const priorityMenuOpen = ref(false);
 const agentMenuOpen = ref(false);
 const confirmingDone = ref(false);
 
+const hasDetails = computed(
+  () =>
+    Boolean(props.task.detail || props.task.accept || props.task.branch || props.task.pr) ||
+    props.task.repositories.length > 0 ||
+    props.task.agent_runs.length > 0 ||
+    props.task.open_blockers.length > 0,
+);
+
 watch(
   () => props.query,
   (query) => {
     if (query.trim()) expanded.value = true;
+  },
+);
+
+watch(
+  () => props.focusRequested,
+  (requested) => {
+    if (requested && hasDetails.value) expanded.value = true;
   },
 );
 
@@ -152,14 +179,6 @@ const statusClass = computed(() => {
   if (props.task.status === "todo" && !props.task.actionable) return "status-blocked";
   return `status-${props.task.status}`;
 });
-
-const hasDetails = computed(
-  () =>
-    Boolean(props.task.detail || props.task.accept || props.task.branch || props.task.pr) ||
-    props.task.repositories.length > 0 ||
-    props.task.agent_runs.length > 0 ||
-    props.task.open_blockers.length > 0,
-);
 
 function formatTime(value: string | null): string {
   if (!value) return "—";
@@ -340,7 +359,13 @@ function shortIdentifier(value: string): string {
       </template>
       <div v-else class="status-confirm">
         <strong>确认完成 #{{ task.ref }}?</strong>
-        <MarkdownBlock v-if="task.accept" :text="task.accept" />
+        <MarkdownBlock
+          v-if="task.accept"
+          :text="task.accept"
+          :task-refs="taskRefs"
+          :note-refs="noteRefs"
+          @reference="$emit('reference', $event)"
+        />
         <span v-else class="status-confirm-hint">该任务没有登记验收条件。</span>
         <div class="status-confirm-actions">
           <button type="button" class="secondary-button" @click="closeMenus">取消</button>
@@ -350,11 +375,22 @@ function shortIdentifier(value: string): string {
     </div>
 
     <div v-if="expanded && hasDetails" class="task-detail">
-      <MarkdownBlock v-if="task.detail" :text="task.detail" />
+      <MarkdownBlock
+        v-if="task.detail"
+        :text="task.detail"
+        :task-refs="taskRefs"
+        :note-refs="noteRefs"
+        @reference="$emit('reference', $event)"
+      />
 
       <div v-if="task.accept && task.status !== 'done'" class="acceptance-block">
         <strong class="acceptance-label">验收</strong>
-        <MarkdownBlock :text="task.accept" />
+        <MarkdownBlock
+          :text="task.accept"
+          :task-refs="taskRefs"
+          :note-refs="noteRefs"
+          @reference="$emit('reference', $event)"
+        />
       </div>
 
       <dl class="task-facts">
