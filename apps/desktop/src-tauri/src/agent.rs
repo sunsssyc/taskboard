@@ -345,23 +345,6 @@ fn open_codex_thread(thread_id: &str) -> Result<(), String> {
     })
 }
 
-fn open_codex_workspace(executable: &Path, repository: &Path) -> Result<(), String> {
-    let output = Command::new(executable)
-        .arg("app")
-        .arg(repository)
-        .output()
-        .map_err(|error| format!("无法打开 Codex 桌面应用：{error}"))?;
-    if output.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    Err(if stderr.is_empty() {
-        format!("Codex 桌面应用启动失败：{}", output.status)
-    } else {
-        format!("Codex 桌面应用启动失败：{stderr}")
-    })
-}
-
 fn turn_completed(message: &str, turn_id: &str) -> bool {
     let Ok(message) = serde_json::from_str::<Value>(message) else {
         return false;
@@ -375,26 +358,22 @@ fn monitor_codex_turn(
     stdin: ChildStdin,
     receiver: Receiver<String>,
     cancel: Receiver<()>,
-    thread_id: String,
     turn_id: String,
 ) {
-    let should_open = loop {
+    loop {
         match cancel.try_recv() {
-            Ok(()) | Err(TryRecvError::Disconnected) => break false,
+            Ok(()) | Err(TryRecvError::Disconnected) => break,
             Err(TryRecvError::Empty) => {}
         }
         match receiver.recv_timeout(Duration::from_millis(250)) {
-            Ok(message) if turn_completed(&message, &turn_id) => break true,
+            Ok(message) if turn_completed(&message, &turn_id) => break,
             Ok(_) | Err(RecvTimeoutError::Timeout) => {}
-            Err(RecvTimeoutError::Disconnected) => break true,
+            Err(RecvTimeoutError::Disconnected) => break,
         }
-    };
+    }
     drop(stdin);
     let _ = child.kill();
     let _ = child.wait();
-    if should_open {
-        let _ = open_codex_thread(&thread_id);
-    }
 }
 
 fn launch_codex(
@@ -506,19 +485,13 @@ fn launch_codex(
             return Err(error);
         }
     };
-    let warning = open_codex_workspace(&executable, repository).err();
+    // `turn/start` 已经把首条任务写入目标线程；应立即打开该线程，而不是只打开
+    // 一个没有当前任务上下文的通用仓库工作区。
+    let warning = open_codex_thread(&thread_id).err();
     let (cancel_sender, cancel_receiver) = mpsc::channel();
-    let monitor_thread_id = thread_id.clone();
     let monitor_turn_id = turn_id.clone();
     let worker = thread::spawn(move || {
-        monitor_codex_turn(
-            child,
-            stdin,
-            receiver,
-            cancel_receiver,
-            monitor_thread_id,
-            monitor_turn_id,
-        )
+        monitor_codex_turn(child, stdin, receiver, cancel_receiver, monitor_turn_id)
     });
     Ok((
         AgentLaunch {
