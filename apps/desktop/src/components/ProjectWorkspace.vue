@@ -29,7 +29,6 @@ defineEmits<{ showAll: [] }>();
           <h2>{{ project.name }}</h2>
           <code v-if="!singleProject" class="project-heading-key">{{ project.key }}</code>
         </div>
-        <p>{{ project.summary || "持续保存目标、进度、结论和下一步。" }}</p>
       </div>
 
       <dl class="project-heading-meta" aria-label="需求概览">
@@ -55,6 +54,10 @@ defineEmits<{ showAll: [] }>();
           </dd>
         </div>
       </dl>
+
+      <p class="project-heading-summary">
+        {{ project.summary || "持续保存目标、进度、结论和下一步。" }}
+      </p>
     </header>
 
     <TaskGroups :tasks="tasks" :project-key="project.key" :query="query" />

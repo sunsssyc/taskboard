@@ -14,6 +14,7 @@ import {
 } from "./sidebar";
 import {
   applyZoom,
+  contentMaxWidthForZoom,
   readStoredZoom,
   zoomActionForShortcut,
   zoomForAction,
@@ -91,6 +92,10 @@ const gateCount = computed(() =>
 const filterActive = computed(
   () => Boolean(query.value.trim() || statusFilter.value || ownerFilter.value),
 );
+
+const appFrameStyle = computed(() => ({
+  "--content-max-width": `${contentMaxWidthForZoom(zoomScale.value)}px`,
+}));
 
 function formatGeneratedAt(value: string | undefined): string {
   if (!value) return "尚未载入";
@@ -238,7 +243,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="app-frame">
+  <div class="app-frame" :style="appFrameStyle">
     <Transition name="zoom-fade">
       <div v-if="zoomNotice" class="zoom-notice" aria-live="polite">{{ zoomNotice }}</div>
     </Transition>

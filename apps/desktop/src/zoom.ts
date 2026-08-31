@@ -4,6 +4,7 @@ export const MIN_ZOOM = 0.75;
 export const MAX_ZOOM = 1.75;
 export const ZOOM_STEP = 0.1;
 export const DEFAULT_ZOOM = 1;
+export const CONTENT_VISUAL_MAX_WIDTH = 1280;
 
 const STORAGE_KEY = "taskboard:zoom";
 
@@ -27,6 +28,10 @@ export function zoomForAction(current: number, action: ZoomAction): number {
   if (action === "reset") return DEFAULT_ZOOM;
   const delta = action === "in" ? ZOOM_STEP : -ZOOM_STEP;
   return clampZoom(Math.round((current + delta) * 10) / 10);
+}
+
+export function contentMaxWidthForZoom(scale: number): number {
+  return Math.round((CONTENT_VISUAL_MAX_WIDTH / clampZoom(scale)) * 100) / 100;
 }
 
 export function readStoredZoom(): number {

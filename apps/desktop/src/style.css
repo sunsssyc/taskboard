@@ -34,7 +34,7 @@
   --sidebar-section-size: 11.5px;
   --sidebar-item-size: 12.5px;
   --sidebar-meta-size: 10px;
-  --content-max-width: 1600px;
+  --content-max-width: 1280px;
 }
 
 * { box-sizing: border-box; }
@@ -867,7 +867,15 @@ body.project-drag-active {
   font-size: 11.5px;
 }
 .repository-chip { font-size: 9.5px; }
-.project-heading p { margin: 0; color: var(--ink-muted); font-size: 13px; }
+.project-heading-summary {
+  grid-column: 1 / -1;
+  max-width: 1120px;
+  margin: -5px 0 0;
+  color: var(--ink-muted);
+  font-size: 13px;
+  line-height: 1.58;
+  overflow-wrap: anywhere;
+}
 .project-heading-meta {
   display: flex;
   min-width: 0;

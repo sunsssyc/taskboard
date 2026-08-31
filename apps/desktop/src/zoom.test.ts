@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  CONTENT_VISUAL_MAX_WIDTH,
   MAX_ZOOM,
   MIN_ZOOM,
   clampZoom,
+  contentMaxWidthForZoom,
   zoomActionForShortcut,
   zoomForAction,
 } from "./zoom";
@@ -27,5 +29,14 @@ describe("desktop zoom shortcuts", () => {
     expect(clampZoom(4)).toBe(MAX_ZOOM);
     expect(zoomForAction(MIN_ZOOM, "out")).toBe(MIN_ZOOM);
     expect(zoomForAction(MAX_ZOOM, "in")).toBe(MAX_ZOOM);
+  });
+
+  it("keeps the visual content width stable across zoom levels", () => {
+    expect(contentMaxWidthForZoom(1)).toBe(CONTENT_VISUAL_MAX_WIDTH);
+    expect(contentMaxWidthForZoom(1.1)).toBeCloseTo(1163.64, 2);
+    expect(contentMaxWidthForZoom(MAX_ZOOM) * MAX_ZOOM).toBeCloseTo(
+      CONTENT_VISUAL_MAX_WIDTH,
+      1,
+    );
   });
 });
