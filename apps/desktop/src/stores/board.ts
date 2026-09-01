@@ -1,5 +1,5 @@
 import { computed, ref } from "vue";
-import { defineStore } from "pinia";
+import { acceptHMRUpdate, defineStore } from "pinia";
 import {
   dispatchTaskAgent,
   loadBoardSnapshot,
@@ -25,8 +25,30 @@ function normalized(value: string | null | undefined): string {
   return (value ?? "").toLocaleLowerCase();
 }
 
+export type BoardSearchQuery =
+  | { kind: "text"; needle: string }
+  | { kind: "task-id"; id: number }
+  | { kind: "note-id"; id: number }
+  | { kind: "any-id"; id: number };
+
+export function parseSearchQuery(query: string): BoardSearchQuery {
+  const trimmed = query.trim();
+  const taskId = trimmed.match(/^#(\d+)$/);
+  if (taskId) return { kind: "task-id", id: Number(taskId[1]) };
+
+  const noteId = trimmed.match(/^\[(\d+)\]$/);
+  if (noteId) return { kind: "note-id", id: Number(noteId[1]) };
+
+  if (/^\d+$/.test(trimmed)) return { kind: "any-id", id: Number(trimmed) };
+  return { kind: "text", needle: normalized(trimmed) };
+}
+
 export function taskMatches(task: BoardTask, query: string): boolean {
-  const needle = normalized(query).trim();
+  const parsed = parseSearchQuery(query);
+  if (parsed.kind === "task-id" || parsed.kind === "any-id") return task.ref === parsed.id;
+  if (parsed.kind === "note-id") return false;
+
+  const { needle } = parsed;
   if (!needle) return true;
   return [
     task.title,
@@ -41,7 +63,11 @@ export function taskMatches(task: BoardTask, query: string): boolean {
 }
 
 export function noteMatches(note: BoardNote, query: string): boolean {
-  const needle = normalized(query).trim();
+  const parsed = parseSearchQuery(query);
+  if (parsed.kind === "note-id" || parsed.kind === "any-id") return note.id === parsed.id;
+  if (parsed.kind === "task-id") return false;
+
+  const { needle } = parsed;
   if (!needle) return true;
   return [note.title, note.body, note.metric, note.category].some((value) =>
     normalized(value).includes(needle),
@@ -49,7 +75,10 @@ export function noteMatches(note: BoardNote, query: string): boolean {
 }
 
 export function projectMatches(project: BoardProject, query: string): boolean {
-  const needle = normalized(query).trim();
+  const parsed = parseSearchQuery(query);
+  if (parsed.kind !== "text") return false;
+
+  const { needle } = parsed;
   if (!needle) return false;
   return [
     project.key,
@@ -435,3 +464,7 @@ export const useBoardStore = defineStore("board", () => {
     load,
   };
 });
+
+if (import.meta.hot) {
+  import.meta.hot.accept(acceptHMRUpdate(useBoardStore, import.meta.hot));
+}

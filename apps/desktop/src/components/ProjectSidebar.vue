@@ -14,6 +14,7 @@ import {
   MIN_SIDEBAR_WIDTH,
   SIDEBAR_WIDTH_STEP,
 } from "../sidebar";
+import { projectDisplayName } from "../projectName";
 import type { BoardProject, BoardTask } from "../types";
 
 const props = defineProps<{
@@ -61,7 +62,7 @@ const dropTargetProject = computed(() =>
 const activeProjectCount = computed(() => props.pinnedProjects.length + props.projects.length);
 const dragHint = computed(() => {
   if (!dropTargetProject.value) return "拖到目标需求的前方或后方";
-  return `移到「${dropTargetProject.value.name}」${dropBefore.value ? "前方" : "后方"}`;
+  return `移到「${projectDisplayName(dropTargetProject.value)}」${dropBefore.value ? "前方" : "后方"}`;
 });
 
 function outlineTasks(project: BoardProject): BoardTask[] {
@@ -148,7 +149,9 @@ function onPointerUp() {
     const placement = dropBefore.value ? "前方" : "后方";
     emit("reorder", pointerDrag.key, dropTargetKey.value, dropBefore.value);
     dropConfirmedKey.value = dropTargetKey.value;
-    dropNotice.value = target ? `已移到「${target.name}」${placement}` : "需求顺序已更新";
+    dropNotice.value = target
+      ? `已移到「${projectDisplayName(target)}」${placement}`
+      : "需求顺序已更新";
     window.clearTimeout(dropNoticeTimer);
     dropNoticeTimer = window.setTimeout(() => {
       dropConfirmedKey.value = "";
@@ -256,8 +259,7 @@ onBeforeUnmount(() => {
               @pointerdown="onPointerDown($event, project.key)"
               @click="onProjectClick(project.key)"
             >
-              <span class="project-key">{{ project.key }}</span>
-              <strong>{{ project.name }}</strong>
+              <strong>{{ projectDisplayName(project) }}</strong>
             </button>
             <button
               v-else
@@ -267,13 +269,13 @@ onBeforeUnmount(() => {
               @pointerdown="onPointerDown($event, project.key)"
               @click="onProjectClick(project.key)"
             >
-              <span>{{ project.name }}</span>
+              <span>{{ projectDisplayName(project) }}</span>
             </button>
             <span class="pinned-project-actions">
               <button
                 type="button"
                 class="pin-button active"
-                :aria-label="`取消置顶 ${project.name}`"
+                :aria-label="`取消置顶 ${projectDisplayName(project)}`"
                 aria-pressed="true"
                 title="取消置顶"
                 @pointerdown.stop
@@ -284,7 +286,7 @@ onBeforeUnmount(() => {
               <button
                 type="button"
                 class="complete-project-button"
-                :aria-label="`完成需求 ${project.name}`"
+                :aria-label="`完成需求 ${projectDisplayName(project)}`"
                 title="完成需求"
                 @pointerdown.stop
                 @click.stop="$emit('setArchived', project.key, true)"
@@ -342,8 +344,7 @@ onBeforeUnmount(() => {
             @pointerdown="onPointerDown($event, project.key)"
             @click="onProjectClick(project.key)"
           >
-            <span class="project-key">{{ project.key }}</span>
-            <strong>{{ project.name }}</strong>
+            <strong>{{ projectDisplayName(project) }}</strong>
           </button>
 
           <span class="project-card-actions">
@@ -352,7 +353,7 @@ onBeforeUnmount(() => {
               class="pin-button"
               :class="{ active: isPinned(project.key) }"
               :title="isPinned(project.key) ? '取消置顶' : '置顶'"
-              :aria-label="`${isPinned(project.key) ? '取消置顶' : '置顶'} ${project.name}`"
+              :aria-label="`${isPinned(project.key) ? '取消置顶' : '置顶'} ${projectDisplayName(project)}`"
               :aria-pressed="isPinned(project.key)"
               @pointerdown.stop
               @click.stop="$emit('togglePin', project.key)"
@@ -362,7 +363,7 @@ onBeforeUnmount(() => {
             <button
               type="button"
               class="complete-project-button"
-              :aria-label="`完成需求 ${project.name}`"
+              :aria-label="`完成需求 ${projectDisplayName(project)}`"
               title="完成需求"
               @pointerdown.stop
               @click.stop="$emit('setArchived', project.key, true)"
@@ -406,13 +407,12 @@ onBeforeUnmount(() => {
             class="completed-project-row"
           >
             <span>
-              <strong>{{ project.name }}</strong>
-              <small>{{ project.key }}</small>
+              <strong>{{ projectDisplayName(project) }}</strong>
             </span>
             <button
               type="button"
               class="restore-project-button"
-              :aria-label="`恢复需求 ${project.name}`"
+              :aria-label="`恢复需求 ${projectDisplayName(project)}`"
               title="恢复到工作列表"
               @click="$emit('setArchived', project.key, false)"
             >
@@ -460,8 +460,7 @@ onBeforeUnmount(() => {
       >
         <span class="drag-grip">⋮⋮</span>
         <span class="drag-preview-copy">
-          <code>{{ draggingProject.key }}</code>
-          <strong>{{ draggingProject.name }}</strong>
+          <strong>{{ projectDisplayName(draggingProject) }}</strong>
           <small>{{ dragHint }}</small>
         </span>
       </div>

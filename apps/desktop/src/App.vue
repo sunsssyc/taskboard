@@ -279,8 +279,8 @@ onBeforeUnmount(() => {
 
     <div class="toolbar" role="search">
       <label class="toolbar-search">
-        <span class="sr-only">搜索任务、正文和结论</span>
-        <input v-model="query" type="search" placeholder="搜索任务、正文、结论…" />
+        <span class="sr-only">搜索任务、正文、结论或节点 ID</span>
+        <input v-model="query" type="search" placeholder="搜索任务、正文、结论或 ID…" />
       </label>
       <label>
         <span class="sr-only">按状态筛选</span>

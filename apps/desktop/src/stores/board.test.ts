@@ -35,6 +35,7 @@ vi.mock("../board", () => ({
 import {
   moveProjectOrder,
   noteMatches,
+  parseSearchQuery,
   projectMatches,
   sortProjectsByPrefs,
   taskMatches,
@@ -197,6 +198,61 @@ describe("board search", () => {
     const note = demoSnapshot.projects[0].findings[0];
     expect(noteMatches(note, "产品结构")).toBe(true);
     expect(noteMatches(note, "6 个需求")).toBe(true);
+  });
+
+  it("parses plain, task, and note ID queries", () => {
+    expect(parseSearchQuery("262")).toEqual({ kind: "any-id", id: 262 });
+    expect(parseSearchQuery(" #262 ")).toEqual({ kind: "task-id", id: 262 });
+    expect(parseSearchQuery("[262]")).toEqual({ kind: "note-id", id: 262 });
+    expect(parseSearchQuery("262 修复")).toEqual({ kind: "text", needle: "262 修复" });
+  });
+
+  it("matches IDs against the node itself instead of body references", () => {
+    const sourceTask = demoSnapshot.projects[0].tasks[0];
+    const targetTask = { ...sourceTask, ref: 262, detail: "目标任务" };
+    const referencedTask = { ...sourceTask, ref: 292, detail: "后续按 #262 推进" };
+    const sourceNote = demoSnapshot.projects[0].findings[0];
+    const targetNote = { ...sourceNote, id: 262, body: "目标结论" };
+    const referencedNote = { ...sourceNote, id: 292, body: "后续按 [262] 的方向补齐" };
+
+    expect(taskMatches(targetTask, "262")).toBe(true);
+    expect(taskMatches(referencedTask, "262")).toBe(false);
+    expect(noteMatches(targetNote, "262")).toBe(true);
+    expect(noteMatches(referencedNote, "262")).toBe(false);
+    expect(taskMatches(targetTask, "#262")).toBe(true);
+    expect(noteMatches(targetNote, "#262")).toBe(false);
+    expect(noteMatches(targetNote, "[262]")).toBe(true);
+    expect(taskMatches(targetTask, "[262]")).toBe(false);
+  });
+
+  it("filters the selected project to the exact note ID", () => {
+    const snapshot = structuredClone(demoSnapshot);
+    const project = snapshot.projects.find((item) => item.key === "reg-calibration");
+    expect(project).toBeDefined();
+
+    const sourceNote = project!.findings[0];
+    project!.findings = [
+      { ...sourceNote, id: 262, title: "目标结论", body: "目标正文" },
+      { ...sourceNote, id: 292, title: "引用结论", body: "后续按 [262] 的方向补齐" },
+    ];
+
+    const board = useBoardStore();
+    board.snapshot = snapshot;
+    board.selectProject("reg-calibration");
+    board.query = "262";
+
+    expect(board.matchingTasks).toEqual([]);
+    expect(board.matchingFindings.map((note) => note.id)).toEqual([262]);
+  });
+
+  it("does not turn project metadata into an ID-wide match", () => {
+    const project = {
+      ...demoSnapshot.projects[0],
+      summary: "当前任务 #262，结论 [262]",
+    };
+    expect(projectMatches(project, "262")).toBe(false);
+    expect(projectMatches(project, "#262")).toBe(false);
+    expect(projectMatches(project, "[262]")).toBe(false);
   });
 
   it("keeps selected project and search state in one store", () => {
