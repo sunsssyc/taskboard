@@ -251,6 +251,7 @@ class Store:
         """就地补列:老库直接用新版本打开即可,不需要单独的迁移命令。"""
         self._add_columns('notes', {
             'category': 'TEXT', 'superseded_by': 'INTEGER', 'superseded_at': 'TEXT',
+            'settled_at': 'TEXT',
             'repository_id': 'INTEGER REFERENCES repositories(id) ON DELETE CASCADE',
             'task_id': 'INTEGER REFERENCES tasks(id) ON DELETE SET NULL',
             'aligned_at': 'TEXT', 'aligned_commit': 'TEXT', 'rejected_at': 'TEXT',
@@ -1030,8 +1031,39 @@ class Store:
         self.conn.commit()
         return self.get_note(note_id)
 
+    # ── 沉淀 ────────────────────────────────────────────────────────────
+    def settle_note(self, note_id: int) -> sqlite3.Row:
+        """结论仍然成立,但已充分兑现、不再约束下一步动作。"""
+        target = self.get_note(note_id)
+        if target['settled_at'] is not None:
+            raise BoardError(f'记录 {note_id} 已经沉淀')
+        if target['superseded_by'] is not None:
+            raise BoardError(f'记录 {note_id} 已被推翻,不需要沉淀')
+        self.conn.execute(
+            'UPDATE notes SET settled_at = ? WHERE id = ?',
+            (now_iso(), note_id),
+        )
+        self.log_event('note_settled', project=target['project'],
+                       note_id=note_id, title=target['title'])
+        self.conn.commit()
+        return self.get_note(note_id)
+
+    def unsettle_note(self, note_id: int) -> sqlite3.Row:
+        """把沉淀的记录拉回到活跃视图。"""
+        target = self.get_note(note_id)
+        if target['settled_at'] is None:
+            raise BoardError(f'记录 {note_id} 没有沉淀')
+        self.conn.execute(
+            'UPDATE notes SET settled_at = NULL WHERE id = ?',
+            (note_id,),
+        )
+        self.log_event('note_unsettled', project=target['project'], note_id=note_id)
+        self.conn.commit()
+        return self.get_note(note_id)
+
     def notes(self, project: str, kind: str | None = None,
-              include_superseded: bool = True) -> list[sqlite3.Row]:
+              include_superseded: bool = True,
+              include_settled: bool = True) -> list[sqlite3.Row]:
         sql = 'SELECT * FROM notes WHERE project = ?'
         args: list = [project]
         if kind:
@@ -1039,6 +1071,8 @@ class Store:
             args.append(kind)
         if not include_superseded:
             sql += ' AND superseded_by IS NULL'
+        if not include_settled:
+            sql += ' AND settled_at IS NULL'
         sql += ' ORDER BY id'
         return list(self.conn.execute(sql, args))
 
@@ -1056,9 +1090,9 @@ class Store:
 
     # ── 派生视图 ────────────────────────────────────────────────────────
     def _note_dicts(self, project: str, kind: str) -> list[dict]:
-        """带上推翻关系:superseded_by(被谁推翻)与 supersedes(推翻了谁)。
+        """带上推翻/沉淀关系,按活跃→沉淀→推翻排序。
 
-        有效记录在前、被推翻的沉底,让读的人先看到当前结论。
+        活跃记录在前,沉淀的次之(仍然成立但不约束下一步),被推翻的沉底。
         """
         rows = [dict(row) for row in self.notes(project, kind)]
         overturned: dict[int, list[int]] = {}
@@ -1068,7 +1102,10 @@ class Store:
         for row in rows:
             row['supersedes'] = sorted(overturned.get(row['id'], []))
             row['is_superseded'] = row['superseded_by'] is not None
-        return sorted(rows, key=lambda row: (row['is_superseded'], row['id']))
+            row['is_settled'] = row['settled_at'] is not None
+        return sorted(rows, key=lambda row: (
+            row['is_superseded'], row['is_settled'], row['id'],
+        ))
 
     # ── 概念对齐 ────────────────────────────────────────────────────────
     def _note_files(self, note_id: int) -> list[dict]:

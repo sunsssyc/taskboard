@@ -350,18 +350,21 @@ def cmd_brief(store: Store, args) -> int:
                 if task['detail'] and args.verbose:
                     print(f'  {task["detail"]}')
 
-        findings = [f for f in project['findings'] if not f['is_superseded']]
+        findings = [f for f in project['findings']
+                    if not f['is_superseded'] and not f['is_settled']]
         if findings:
             print('\n## 已定结论(不要重新推演)')
             for note in findings:
                 metric = f' — {note["metric"]}' if note['metric'] else ''
                 print(f'- [{note["id"]}] {note["title"]}{metric}')
-        risks = [r for r in project['risks'] if not r['is_superseded']]
+        risks = [r for r in project['risks']
+                 if not r['is_superseded'] and not r['is_settled']]
         if risks:
             print('\n## 尾巴')
             for note in risks:
                 print(f'- [{note["id"]}] {note["title"]}')
-        links = [link for link in project['links'] if not link['is_superseded']]
+        links = [link for link in project['links']
+                 if not link['is_superseded'] and not link['is_settled']]
         if links:
             print('\n## 关键文件')
             for note in links:
@@ -891,6 +894,8 @@ def cmd_notes(store: Store, args) -> int:
         notes = store._note_dicts(project, kind)
         if not args.superseded:
             notes = [note for note in notes if not note['is_superseded']]
+        if not args.settled:
+            notes = [note for note in notes if not note['is_settled']]
         if not notes:
             continue
         print(paint(label, BOLD))
@@ -905,18 +910,31 @@ def cmd_notes(store: Store, args) -> int:
                 title = note['title']
                 if note['is_superseded']:
                     title = paint(f'{title}(已被 [{note["superseded_by"]}] 推翻)', DIM)
+                elif note['is_settled']:
+                    title = paint(f'{title}(已沉淀)', DIM)
                 print(f'    [{note["id"]}] {title}{metric}')
                 if note['supersedes']:
                     print(paint('      ↳ 推翻了 ' + ', '.join(f'[{i}]' for i in note['supersedes']), DIM))
                 if note['body'] and args.verbose:
                     print(paint(f'      {note["body"]}', DIM))
+    hints: list[str] = []
+    if not args.settled:
+        settled = sum(
+            1 for kind in labels
+            for note in store._note_dicts(project, kind)
+            if note['is_settled'] and not note['is_superseded']
+        )
+        if settled:
+            hints.append(f'{settled} 条已沉淀 --settled')
     if not args.superseded:
         hidden = sum(
             1 for kind in labels
             for note in store._note_dicts(project, kind) if note['is_superseded']
         )
         if hidden:
-            print(paint(f'\n另有 {hidden} 条已被推翻 · board notes --superseded 查看', DIM))
+            hints.append(f'{hidden} 条已被推翻 --superseded')
+    if hints:
+        print(paint(f'\n另有 {" · ".join(hints)} 查看', DIM))
     return 0
 
 
@@ -938,6 +956,20 @@ def cmd_restore(store: Store, args) -> int:
     for note_id in args.ids:
         note = store.restore_note(note_id)
         print(f'[{note["id"]}] {note["title"]} → 恢复为有效')
+    return 0
+
+
+def cmd_settle(store: Store, args) -> int:
+    for note_id in args.ids:
+        note = store.settle_note(note_id)
+        print(f'[{note["id"]}] {note["title"]} → 已沉淀')
+    return 0
+
+
+def cmd_unsettle(store: Store, args) -> int:
+    for note_id in args.ids:
+        note = store.unsettle_note(note_id)
+        print(f'[{note["id"]}] {note["title"]} → 恢复为活跃')
     return 0
 
 
@@ -1245,8 +1277,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help='否决:不算新概念,或方案本身不对')
     sp.set_defaults(func=cmd_align)
 
-    sp = sub.add_parser('notes', help='列结论/尾巴/文件(默认只列有效的)')
+    sp = sub.add_parser('notes', help='列结论/尾巴/文件(默认只列活跃的)')
     sp.add_argument('-v', '--verbose', action='store_true')
+    sp.add_argument('--settled', action='store_true', help='含已沉淀的')
     sp.add_argument('--superseded', action='store_true', help='含已被推翻的')
     add_project_flag(sp)
     sp.set_defaults(func=cmd_notes)
@@ -1259,6 +1292,14 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser('restore', help='撤销推翻标记')
     sp.add_argument('ids', type=int, nargs='+')
     sp.set_defaults(func=cmd_restore)
+
+    sp = sub.add_parser('settle', help='沉淀:结论仍成立但不再约束下一步')
+    sp.add_argument('ids', type=int, nargs='+')
+    sp.set_defaults(func=cmd_settle)
+
+    sp = sub.add_parser('unsettle', help='撤销沉淀,拉回活跃视图')
+    sp.add_argument('ids', type=int, nargs='+')
+    sp.set_defaults(func=cmd_unsettle)
 
     sp = sub.add_parser('note-rm', help='删记录')
     sp.add_argument('ids', type=int, nargs='+')

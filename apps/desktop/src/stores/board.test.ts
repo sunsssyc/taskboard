@@ -37,6 +37,7 @@ import {
   noteMatches,
   parseSearchQuery,
   projectMatches,
+  resolveSearchQuery,
   sortProjectsByPrefs,
   taskMatches,
   useBoardStore,
@@ -223,6 +224,33 @@ describe("board search", () => {
     expect(noteMatches(targetNote, "#262")).toBe(false);
     expect(noteMatches(targetNote, "[262]")).toBe(true);
     expect(taskMatches(targetTask, "[262]")).toBe(false);
+  });
+
+  it("falls back to full-text search when a plain numeric ID does not exist", () => {
+    const snapshot = structuredClone(demoSnapshot);
+    const project = snapshot.projects.find((item) => item.key === "reg-calibration");
+    expect(project).toBeDefined();
+
+    const sourceTask = project!.tasks[0];
+    const sourceNote = project!.findings[0];
+    project!.tasks = [{ ...sourceTask, ref: 291, detail: "补齐 3000 条训练样本" }];
+    project!.findings = [{ ...sourceNote, id: 292, body: "固定导出 3000 条" }];
+
+    expect(resolveSearchQuery("3000", snapshot.projects))
+      .toEqual({ kind: "text", needle: "3000" });
+
+    const board = useBoardStore();
+    board.snapshot = snapshot;
+    board.selectProject("reg-calibration");
+    board.query = "3000";
+
+    expect(board.matchingTasks.map((task) => task.ref)).toEqual([291]);
+    expect(board.matchingFindings.map((note) => note.id)).toEqual([292]);
+
+    board.query = "#3000";
+    expect(board.matchingTasks).toEqual([]);
+    board.query = "[3000]";
+    expect(board.matchingFindings).toEqual([]);
   });
 
   it("filters the selected project to the exact note ID", () => {

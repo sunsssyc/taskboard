@@ -90,6 +90,8 @@ export interface BoardNote {
   superseded_at: string | null;
   supersedes: number[];
   is_superseded: boolean;
+  settled_at: string | null;
+  is_settled: boolean;
 }
 
 export interface BoardProject {

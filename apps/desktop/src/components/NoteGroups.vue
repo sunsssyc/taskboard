@@ -10,7 +10,7 @@ import {
 } from "vue";
 import MarkdownBlock from "./MarkdownBlock.vue";
 import ReferenceText from "./ReferenceText.vue";
-import { buildNoteSheets } from "../noteSheets";
+import { buildNoteSheets, countSettled } from "../noteSheets";
 import type { BoardReference } from "../references";
 import type { BoardNote } from "../types";
 
@@ -32,7 +32,11 @@ const sheetTabs = ref<HTMLElement | null>(null);
 const rootElement = ref<HTMLElement | null>(null);
 let resizeObserver: ResizeObserver | null = null;
 let layoutFrame = 0;
-const sheets = computed(() => buildNoteSheets(props.findings, props.risks, props.links));
+const showSettled = ref(false);
+const settledCount = computed(() => countSettled(props.findings, props.risks, props.links));
+const sheets = computed(() =>
+  buildNoteSheets(props.findings, props.risks, props.links, showSettled.value),
+);
 const activeSheet = computed(
   () => sheets.value.find((sheet) => sheet.id === activeSheetId.value) ?? sheets.value[0],
 );
@@ -190,7 +194,16 @@ defineExpose({ revealNote });
           <h2>约束性结论</h2>
           <span class="eyebrow">按主题切换，后续决策以当前事实为准</span>
         </div>
-        <span class="panel-count">{{ findings.length + risks.length + links.length }} 条</span>
+        <span class="panel-count">
+          <button
+            v-if="settledCount > 0"
+            type="button"
+            class="settled-toggle"
+            :class="{ active: showSettled }"
+            @click="showSettled = !showSettled"
+          >{{ showSettled ? '隐藏' : '显示' }} {{ settledCount }} 条已沉淀</button>
+          <span v-else>{{ findings.length + risks.length + links.length }} 条</span>
+        </span>
       </header>
 
       <div
@@ -206,7 +219,7 @@ defineExpose({ revealNote });
           v-for="note in activeSheet.notes"
           :key="note.id"
           class="note-row"
-          :class="{ open: isOpen(note), superseded: note.is_superseded }"
+          :class="{ open: isOpen(note), superseded: note.is_superseded, settled: note.is_settled }"
           :data-note-id="note.id"
         >
           <button

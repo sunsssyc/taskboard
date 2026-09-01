@@ -393,6 +393,12 @@ details[open] > summary::before { transform:rotate(45deg); }
 .note-ref { color:inherit; text-decoration:none; text-underline-offset:2px; }
 .note-ref:hover { color:var(--accent); text-decoration:underline; }
 .note-ref:focus-visible { outline:2px solid var(--accent); outline-offset:2px; border-radius:2px; }
+.note.settled { grid-column:1/-1; background:var(--chrome); border:0; padding:0; }
+.note.settled .note-summary { color:var(--ink-faint); }
+.note.settled .tag { display:inline-block; font-family:var(--mono); font-size:10px;
+                     letter-spacing:.03em; color:var(--ink-faint); background:var(--chrome);
+                     border:1px solid var(--rule-soft); border-radius:999px; padding:2px 8px;
+                     margin-right:8px; white-space:nowrap; vertical-align:1px; }
 .note.superseded { grid-column:1/-1; background:var(--chrome); border:0; padding:0; }
 .note-filter-wrapper { grid-column:1/-1; border-bottom:1px solid var(--rule-soft); }
 .note-filter-wrapper:last-child { border-bottom:0; }
@@ -1512,6 +1518,11 @@ def _note_card(note: dict, kind: str) -> str:
         return f"""      <div class="note-filter-wrapper" data-filter-item data-search="{esc(search_text)}"><details class="note superseded" id="note-{note['id']}">
         <summary class="note-summary"><span class="note-title" role="heading" aria-level="4"><span class="note-id">[{note['id']}]</span><span class="note-heading">{esc(note['title'])}</span></span></summary>
         <div class="note-content"><div class="note-aside"><div class="overturns"><a class="tag note-ref" href="#note-{note['superseded_by']}">已被 [{note['superseded_by']}] 推翻</a></div></div>{f'<div class="markdown">{render_markdown(note["body"])}</div>' if note.get('body') else ''}</div>
+      </details></div>"""
+    if note.get('is_settled'):
+        return f"""      <div class="note-filter-wrapper" data-filter-item data-search="{esc(search_text)}"><details class="note settled" id="note-{note['id']}">
+        <summary class="note-summary"><span class="note-title" role="heading" aria-level="4"><span class="note-id">[{note['id']}]</span><span class="note-heading">{esc(note['title'])}</span></span><span class="tag">已沉淀</span></summary>
+        <div class="note-content"><div class="note-aside">{f'<div class="metric">{esc(note["metric"])}</div>' if note.get('metric') else ''}</div>{f'<div class="markdown">{render_markdown(note["body"])}</div>' if note.get('body') else ''}</div>
       </details></div>"""
     metric = f'<div class="metric">{esc(note["metric"])}</div>' if note.get('metric') else ''
     body_text = note.get('body') or ''

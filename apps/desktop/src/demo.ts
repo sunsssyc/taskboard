@@ -124,6 +124,8 @@ export const demoSnapshot: BoardSnapshot = {
           superseded_at: null,
           supersedes: [],
           is_superseded: false,
+          settled_at: null,
+          is_settled: false,
         },
         {
           id: 170,
@@ -138,6 +140,8 @@ export const demoSnapshot: BoardSnapshot = {
           superseded_at: null,
           supersedes: [],
           is_superseded: false,
+          settled_at: null,
+          is_settled: false,
         },
         {
           id: 171,
@@ -152,6 +156,8 @@ export const demoSnapshot: BoardSnapshot = {
           superseded_at: null,
           supersedes: [],
           is_superseded: false,
+          settled_at: null,
+          is_settled: false,
         },
         {
           id: 172,
@@ -166,6 +172,8 @@ export const demoSnapshot: BoardSnapshot = {
           superseded_at: null,
           supersedes: [],
           is_superseded: false,
+          settled_at: null,
+          is_settled: false,
         },
         {
           id: 173,
@@ -180,6 +188,8 @@ export const demoSnapshot: BoardSnapshot = {
           superseded_at: null,
           supersedes: [],
           is_superseded: false,
+          settled_at: null,
+          is_settled: false,
         },
         {
           id: 174,
@@ -194,6 +204,8 @@ export const demoSnapshot: BoardSnapshot = {
           superseded_at: null,
           supersedes: [],
           is_superseded: false,
+          settled_at: null,
+          is_settled: false,
         },
         {
           id: 175,
@@ -208,6 +220,8 @@ export const demoSnapshot: BoardSnapshot = {
           superseded_at: null,
           supersedes: [],
           is_superseded: false,
+          settled_at: null,
+          is_settled: false,
         },
         {
           id: 176,
@@ -222,6 +236,8 @@ export const demoSnapshot: BoardSnapshot = {
           superseded_at: null,
           supersedes: [],
           is_superseded: false,
+          settled_at: null,
+          is_settled: false,
         },
         {
           id: 177,
@@ -236,6 +252,8 @@ export const demoSnapshot: BoardSnapshot = {
           superseded_at: null,
           supersedes: [],
           is_superseded: false,
+          settled_at: null,
+          is_settled: false,
         },
       ],
       risks: [
@@ -252,6 +270,8 @@ export const demoSnapshot: BoardSnapshot = {
           superseded_at: null,
           supersedes: [],
           is_superseded: false,
+          settled_at: null,
+          is_settled: false,
         },
       ],
       links: [
@@ -268,6 +288,8 @@ export const demoSnapshot: BoardSnapshot = {
           superseded_at: null,
           supersedes: [],
           is_superseded: false,
+          settled_at: null,
+          is_settled: false,
         },
       ],
       updated_at: now,

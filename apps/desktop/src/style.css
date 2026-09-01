@@ -1506,7 +1506,15 @@ body.project-drag-active {
 .sheet-panel-risk .note-row.open { background: linear-gradient(to right, var(--active-soft), var(--surface) 48%); }
 .sheet-panel-link .note-row.open { background: linear-gradient(to right, var(--done-soft), var(--surface) 48%); }
 .note-row.superseded { opacity: 0.55; }
+.note-row.settled { opacity: 0.5; border-left: 2px solid var(--ink-faint); }
+.note-row.settled .note-row-head strong { font-weight: 500; }
 .supersedes { margin-top: 7px; color: var(--ink-faint); font-size: 10px; }
+.settled-toggle {
+  background: none; border: 1px solid var(--border); border-radius: 4px;
+  color: var(--ink-faint); font-size: 11px; padding: 2px 8px; cursor: pointer;
+}
+.settled-toggle:hover { color: var(--ink-body); border-color: var(--ink-faint); }
+.settled-toggle.active { color: var(--ink-body); border-color: var(--accent); }
 
 .empty-state,
 .center-state {

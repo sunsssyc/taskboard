@@ -43,8 +43,27 @@ export function parseSearchQuery(query: string): BoardSearchQuery {
   return { kind: "text", needle: normalized(trimmed) };
 }
 
-export function taskMatches(task: BoardTask, query: string): boolean {
+function asSearchQuery(query: string | BoardSearchQuery): BoardSearchQuery {
+  return typeof query === "string" ? parseSearchQuery(query) : query;
+}
+
+export function resolveSearchQuery(
+  query: string,
+  projects: BoardProject[],
+): BoardSearchQuery {
   const parsed = parseSearchQuery(query);
+  if (parsed.kind !== "any-id") return parsed;
+
+  const nodeExists = projects.some((project) =>
+    project.tasks.some((task) => task.ref === parsed.id)
+    || [...project.findings, ...project.risks, ...project.links]
+      .some((note) => note.id === parsed.id),
+  );
+  return nodeExists ? parsed : { kind: "text", needle: normalized(query.trim()) };
+}
+
+export function taskMatches(task: BoardTask, query: string | BoardSearchQuery): boolean {
+  const parsed = asSearchQuery(query);
   if (parsed.kind === "task-id" || parsed.kind === "any-id") return task.ref === parsed.id;
   if (parsed.kind === "note-id") return false;
 
@@ -62,8 +81,8 @@ export function taskMatches(task: BoardTask, query: string): boolean {
   ].some((value) => normalized(value).includes(needle));
 }
 
-export function noteMatches(note: BoardNote, query: string): boolean {
-  const parsed = parseSearchQuery(query);
+export function noteMatches(note: BoardNote, query: string | BoardSearchQuery): boolean {
+  const parsed = asSearchQuery(query);
   if (parsed.kind === "note-id" || parsed.kind === "any-id") return note.id === parsed.id;
   if (parsed.kind === "task-id") return false;
 
@@ -74,8 +93,8 @@ export function noteMatches(note: BoardNote, query: string): boolean {
   );
 }
 
-export function projectMatches(project: BoardProject, query: string): boolean {
-  const parsed = parseSearchQuery(query);
+export function projectMatches(project: BoardProject, query: string | BoardSearchQuery): boolean {
+  const parsed = asSearchQuery(query);
   if (parsed.kind !== "text") return false;
 
   const { needle } = parsed;
@@ -140,6 +159,7 @@ export const useBoardStore = defineStore("board", () => {
   let projectNoticeTimer: ReturnType<typeof setTimeout> | undefined;
 
   const allProjects = computed(() => snapshot.value?.projects ?? []);
+  const effectiveSearchQuery = computed(() => resolveSearchQuery(query.value, allProjects.value));
   const projects = computed(() => allProjects.value.filter((project) => !project.archived));
   const archivedProjects = computed(() =>
     allProjects.value.filter((project) => project.archived),
@@ -171,18 +191,18 @@ export const useBoardStore = defineStore("board", () => {
   });
 
   function filteredTasks(project: BoardProject): BoardTask[] {
-    const wholeProjectMatches = projectMatches(project, query.value);
+    const wholeProjectMatches = projectMatches(project, effectiveSearchQuery.value);
     return project.tasks.filter((task) => {
       if (statusFilter.value && task.status !== statusFilter.value) return false;
       if (ownerFilter.value && task.owner !== ownerFilter.value) return false;
-      return wholeProjectMatches || taskMatches(task, query.value);
+      return wholeProjectMatches || taskMatches(task, effectiveSearchQuery.value);
     });
   }
 
   function filteredNotes(project: BoardProject, notes: BoardNote[]): BoardNote[] {
     if (statusFilter.value || ownerFilter.value) return [];
-    if (projectMatches(project, query.value)) return notes;
-    return notes.filter((note) => noteMatches(note, query.value));
+    if (projectMatches(project, effectiveSearchQuery.value)) return notes;
+    return notes.filter((note) => noteMatches(note, effectiveSearchQuery.value));
   }
 
   function filteredFindings(project: BoardProject): BoardNote[] {

@@ -17,13 +17,26 @@ function grouped(notes: BoardNote[]): Array<{ category: string; notes: BoardNote
   return [...groups.entries()].map(([category, items]) => ({ category, notes: items }));
 }
 
+/** 统计所有记录中已沉淀(且未被推翻)的条数。 */
+export function countSettled(
+  findings: BoardNote[],
+  risks: BoardNote[],
+  links: BoardNote[],
+): number {
+  return [...findings, ...risks, ...links]
+    .filter((n) => n.is_settled && !n.is_superseded).length;
+}
+
 export function buildNoteSheets(
   findings: BoardNote[],
   risks: BoardNote[],
   links: BoardNote[],
+  includeSettled = false,
 ): NoteSheet[] {
+  const keep = (notes: BoardNote[]) =>
+    includeSettled ? notes : notes.filter((n) => !n.is_settled);
   const sheets: NoteSheet[] = [];
-  for (const group of grouped(findings)) {
+  for (const group of grouped(keep(findings))) {
     sheets.push({
       id: `finding:${group.category}`,
       kind: "finding",
@@ -32,7 +45,7 @@ export function buildNoteSheets(
       notes: group.notes,
     });
   }
-  for (const group of grouped(risks)) {
+  for (const group of grouped(keep(risks))) {
     sheets.push({
       id: `risk:${group.category}`,
       kind: "risk",
@@ -41,7 +54,7 @@ export function buildNoteSheets(
       notes: group.notes,
     });
   }
-  for (const group of grouped(links)) {
+  for (const group of grouped(keep(links))) {
     sheets.push({
       id: `link:${group.category}`,
       kind: "link",
