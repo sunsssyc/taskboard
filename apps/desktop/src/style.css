@@ -1515,6 +1515,17 @@ body.project-drag-active {
 .note-kind-badge.kind-link { color: var(--done); background: var(--done-soft); }
 .note-metric { max-width: 40%; overflow: hidden; color: var(--ink-faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .note-body { padding: 1px 22px 12px 62px; color: var(--ink-body); }
+.note-timestamps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rule-soft);
+  color: var(--ink-faint);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+}
 .note-row.note-kind-risk.open { background: linear-gradient(to right, var(--active-soft), var(--surface) 48%); }
 .note-row.note-kind-link.open { background: linear-gradient(to right, var(--done-soft), var(--surface) 48%); }
 .note-row.superseded { opacity: 0.55; }

@@ -938,6 +938,21 @@ def cmd_notes(store: Store, args) -> int:
     return 0
 
 
+def cmd_note_edit(store: Store, args) -> int:
+    from .store import _UNSET
+    title = getattr(args, 'title', None)
+    body = getattr(args, 'body', None)
+    metric = getattr(args, 'metric', None)
+    note = store.edit_note(
+        args.id,
+        title=title,
+        body=(body or None) if body is not None else _UNSET,
+        metric=(metric or None) if metric is not None else _UNSET,
+    )
+    print(f'[{note["id"]}] {note["title"]} → 已更新')
+    return 0
+
+
 def cmd_note_category(store: Store, args) -> int:
     for note_id in args.ids:
         note = store.set_note_category(note_id, args.category)
@@ -1304,6 +1319,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser('note-rm', help='删记录')
     sp.add_argument('ids', type=int, nargs='+')
     sp.set_defaults(func=cmd_note_rm)
+
+    sp = sub.add_parser('note-edit', help='就地编辑记录的标题、正文或 metric')
+    sp.add_argument('id', type=int)
+    sp.add_argument('--title')
+    sp.add_argument('--body')
+    sp.add_argument('--metric')
+    sp.set_defaults(func=cmd_note_edit)
 
     sp = sub.add_parser('note-category', help='给已有记录设置分类；传空字符串移回未分类')
     sp.add_argument('ids', type=int, nargs='+')

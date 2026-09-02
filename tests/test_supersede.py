@@ -13,13 +13,18 @@ def store(tmp_path):
     s.close()
 
 
-def test_new_note_marks_old_as_superseded(store):
+def test_new_note_marks_old_as_superseded(store, monkeypatch):
+    clock = {'value': '2026-09-02T01:00:00+00:00'}
+    monkeypatch.setattr('taskboard.store.now_iso', lambda: clock['value'])
     old = store.add_note('demo', 'finding', '旧结论', body='当时这么认为')
+
+    clock['value'] = '2026-09-02T02:00:00+00:00'
     new = store.add_note('demo', 'finding', '新结论', supersedes=[old['id']])
 
     refreshed = store.get_note(old['id'])
     assert refreshed['superseded_by'] == new['id']
     assert refreshed['superseded_at'] is not None
+    assert refreshed['updated_at'] == clock['value']
     assert store.get_note(new['id'])['superseded_by'] is None
 
 
@@ -103,6 +108,7 @@ def test_migration_adds_columns_to_existing_db(tmp_path):
         note = store.notes('demo', 'finding')[0]
         assert note['title'] == '老结论'
         assert note['superseded_by'] is None
+        assert note['updated_at'] == note['created_at'] == '2026-01-01'
         newer = store.add_note('demo', 'finding', '新结论', supersedes=[note['id']])
         assert store.get_note(note['id'])['superseded_by'] == newer['id']
     finally:

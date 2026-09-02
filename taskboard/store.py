@@ -26,6 +26,7 @@ CONCEPT_TITLE_LIMIT = 60
 CONCEPT_BODY_LIMIT = 400
 # 一个任务要用超过 3 个新概念时,这本身是信号:任务太大,或方案太聪明。
 TASK_CONCEPT_LIMIT = 3
+_UNSET = object()  # sentinel: 区分"未传"和"传了 None"
 AGENT_PROVIDERS = ('codex', 'claude')
 AGENT_RUN_STATUSES = ('submitted', 'opened', 'failed')
 PRIORITIES = (0, 1, 2, 3)
@@ -189,7 +190,8 @@ CREATE TABLE IF NOT EXISTS notes (
     aligned_at     TEXT,
     aligned_commit TEXT,
     rejected_at    TEXT,
-    created_at     TEXT NOT NULL
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL
 );
 -- 记录锚定的代码坐标。link 与 concept 共用:link 现在把路径写在标题里,没法可靠 join,
 -- 迁进来之后"这次改动碰了哪些关键文件/概念"才是真的查表而不是字符串前缀匹配。
@@ -255,7 +257,13 @@ class Store:
             'repository_id': 'INTEGER REFERENCES repositories(id) ON DELETE CASCADE',
             'task_id': 'INTEGER REFERENCES tasks(id) ON DELETE SET NULL',
             'aligned_at': 'TEXT', 'aligned_commit': 'TEXT', 'rejected_at': 'TEXT',
+            'updated_at': 'TEXT',
         })
+        # 老库只有创建时间。迁移时以 created_at 作为最后已知变更时间，避免伪造当前时间；
+        # 新写入和后续状态变更都会同时维护 updated_at。
+        self.conn.execute(
+            'UPDATE notes SET updated_at = created_at WHERE updated_at IS NULL'
+        )
         # 索引建在补列之后:老库里 notes 表已存在,SCHEMA 的 CREATE TABLE 是空操作,
         # 那时 repository_id 还没补上,索引写在 SCHEMA 里会直接报 no such column
         self.conn.execute(
@@ -949,10 +957,11 @@ class Store:
         for target in targets:
             if target['project'] != project:
                 raise BoardError(f'记录 {target["id"]} 属于项目 {target["project"]},不能跨项目推翻')
+        stamp = now_iso()
         cursor = self.conn.execute(
-            'INSERT INTO notes (project, kind, category, title, body, metric, created_at)'
-            ' VALUES (?,?,?,?,?,?,?)',
-            (project, kind, category, title, body, metric, now_iso()),
+            'INSERT INTO notes (project, kind, category, title, body, metric,'
+            ' created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)',
+            (project, kind, category, title, body, metric, stamp, stamp),
         )
         note_id = cursor.lastrowid
         self.log_event('note_added', project=project, kind=kind, title=title,
@@ -983,11 +992,50 @@ class Store:
             raise BoardError('分类不能超过 40 个字符')
         return value
 
+    def edit_note(self, note_id: int, *,
+                  title: str | None = None,
+                  body: str | None = _UNSET,
+                  metric: str | None = _UNSET) -> sqlite3.Row:
+        """就地编辑记录的标题、正文或 metric；只改传入的字段。"""
+        note = self.get_note(note_id)
+        updates: list[str] = []
+        params: list = []
+        if title is not None:
+            title = title.strip()
+            if not title:
+                raise BoardError('标题不能为空')
+            validate_markdown_newlines(title)
+            updates.append('title = ?')
+            params.append(title)
+        if body is not _UNSET:
+            if body is not None:
+                validate_markdown_newlines(body)
+            updates.append('body = ?')
+            params.append(body)
+        if metric is not _UNSET:
+            updates.append('metric = ?')
+            params.append(metric)
+        if not updates:
+            raise BoardError('至少要改一个字段 (--title / --body / --metric)')
+        updates.append('updated_at = ?')
+        params.append(now_iso())
+        params.append(note_id)
+        self.conn.execute(
+            f'UPDATE notes SET {", ".join(updates)} WHERE id = ?', params,
+        )
+        self.log_event('note_edited', project=note['project'], note_id=note_id,
+                       fields=[u.split(' =')[0] for u in updates if u != 'updated_at = ?'])
+        self.conn.commit()
+        return self.get_note(note_id)
+
     def set_note_category(self, note_id: int, category: str | None) -> sqlite3.Row:
         """给已有记录归类；空字符串用于移回“未分类”。"""
         note = self.get_note(note_id)
         category = self._normalize_category(category)
-        self.conn.execute('UPDATE notes SET category = ? WHERE id = ?', (category, note_id))
+        self.conn.execute(
+            'UPDATE notes SET category = ?, updated_at = ? WHERE id = ?',
+            (category, now_iso(), note_id),
+        )
         self.log_event('note_category_changed', project=note['project'], note_id=note_id,
                        old=note['category'], new=category)
         self.conn.commit()
@@ -1001,9 +1049,11 @@ class Store:
                 f'记录 {target["id"]} 已被 {target["superseded_by"]} 推翻,'
                 f'请改推翻最新那条'
             )
+        stamp = now_iso()
         self.conn.execute(
-            'UPDATE notes SET superseded_by = ?, superseded_at = ? WHERE id = ?',
-            (by_note_id, now_iso(), target['id']),
+            'UPDATE notes SET superseded_by = ?, superseded_at = ?, updated_at = ?'
+            ' WHERE id = ?',
+            (by_note_id, stamp, stamp, target['id']),
         )
         self.log_event('note_superseded', project=target['project'],
                        note_id=target['id'], by=by_note_id, title=target['title'])
@@ -1024,8 +1074,9 @@ class Store:
         if target['superseded_by'] is None:
             raise BoardError(f'记录 {note_id} 本来就是有效的')
         self.conn.execute(
-            'UPDATE notes SET superseded_by = NULL, superseded_at = NULL WHERE id = ?',
-            (note_id,),
+            'UPDATE notes SET superseded_by = NULL, superseded_at = NULL, updated_at = ?'
+            ' WHERE id = ?',
+            (now_iso(), note_id),
         )
         self.log_event('note_restored', project=target['project'], note_id=note_id)
         self.conn.commit()
@@ -1039,9 +1090,10 @@ class Store:
             raise BoardError(f'记录 {note_id} 已经沉淀')
         if target['superseded_by'] is not None:
             raise BoardError(f'记录 {note_id} 已被推翻,不需要沉淀')
+        stamp = now_iso()
         self.conn.execute(
-            'UPDATE notes SET settled_at = ? WHERE id = ?',
-            (now_iso(), note_id),
+            'UPDATE notes SET settled_at = ?, updated_at = ? WHERE id = ?',
+            (stamp, stamp, note_id),
         )
         self.log_event('note_settled', project=target['project'],
                        note_id=note_id, title=target['title'])
@@ -1054,8 +1106,8 @@ class Store:
         if target['settled_at'] is None:
             raise BoardError(f'记录 {note_id} 没有沉淀')
         self.conn.execute(
-            'UPDATE notes SET settled_at = NULL WHERE id = ?',
-            (note_id,),
+            'UPDATE notes SET settled_at = NULL, updated_at = ? WHERE id = ?',
+            (now_iso(), note_id),
         )
         self.log_event('note_unsettled', project=target['project'], note_id=note_id)
         self.conn.commit()
@@ -1081,8 +1133,9 @@ class Store:
         # 被删的那条可能正推翻着别人:先把指向它的标记清掉,否则旧结论会永远
         # 停在"已被某条不存在的记录推翻"
         self.conn.execute(
-            'UPDATE notes SET superseded_by = NULL, superseded_at = NULL WHERE superseded_by = ?',
-            (note_id,),
+            'UPDATE notes SET superseded_by = NULL, superseded_at = NULL, updated_at = ?'
+            ' WHERE superseded_by = ?',
+            (now_iso(), note_id),
         )
         self.conn.execute('DELETE FROM notes WHERE id = ?', (note_id,))
         self.log_event('note_deleted', project=row['project'], title=row['title'])
@@ -1156,9 +1209,9 @@ class Store:
         stamp = now_iso()
         cursor = self.conn.execute(
             'INSERT INTO notes (project, kind, category, title, body, repository_id,'
-            ' task_id, created_at) VALUES (?,?,?,?,?,?,?,?)',
+            ' task_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
             (owner, 'concept', category, title, body,
-             repo['id'] if repo else None, task_id, stamp),
+             repo['id'] if repo else None, task_id, stamp, stamp),
         )
         note_id = int(cursor.lastrowid)
         if repo:
@@ -1250,9 +1303,11 @@ class Store:
         ).fetchone() if row['repository_id'] else None
         # 需求概念没有仓库,也就没有锚:它不随代码失效,不记 commit
         commit = worktree_head_sha(repo['path']) if repo else None
+        stamp = now_iso()
         self.conn.execute(
-            'UPDATE notes SET aligned_at = ?, aligned_commit = ? WHERE id = ?',
-            (now_iso(), commit, note_id),
+            'UPDATE notes SET aligned_at = ?, aligned_commit = ?, updated_at = ?'
+            ' WHERE id = ?',
+            (stamp, commit, stamp, note_id),
         )
         self.log_event('concept_aligned', project=row['project'], note_id=note_id,
                        commit=commit, note=note)
@@ -1265,9 +1320,10 @@ class Store:
         if not reason:
             raise BoardError('否决要给理由:是不算新概念,还是方案本身不对')
         row = self._concept_row(note_id)
+        stamp = now_iso()
         self.conn.execute(
-            'UPDATE notes SET rejected_at = ?, aligned_at = NULL, aligned_commit = NULL'
-            ' WHERE id = ?', (now_iso(), note_id),
+            'UPDATE notes SET rejected_at = ?, aligned_at = NULL, aligned_commit = NULL,'
+            ' updated_at = ? WHERE id = ?', (stamp, stamp, note_id),
         )
         self.log_event('concept_rejected', project=row['project'], note_id=note_id,
                        reason=reason)
@@ -1327,9 +1383,6 @@ class Store:
         reset = bool({'title', 'body'} & set(changed)) and row['aligned_at'] and not keep_aligned
         if reset:
             sets.extend(['aligned_at = NULL', 'aligned_commit = NULL'])
-        if sets:
-            self.conn.execute(f'UPDATE notes SET {", ".join(sets)} WHERE id = ?',
-                              [*args, note_id])
         if files is not None:
             if not row['repository_id']:
                 raise BoardError('需求概念没有仓库,加不了代码锚点;要锚代码就新提一张仓库概念')
@@ -1337,6 +1390,10 @@ class Store:
             changed.append('files')
         if not changed:
             raise BoardError('没有要改的内容:传 --title / --why / --file / --category')
+        sets.append('updated_at = ?')
+        args.append(now_iso())
+        self.conn.execute(f'UPDATE notes SET {", ".join(sets)} WHERE id = ?',
+                          [*args, note_id])
         self.log_event('concept_updated', project=row['project'], note_id=note_id,
                        fields=sorted(changed), realigned=bool(reset))
         self.conn.commit()

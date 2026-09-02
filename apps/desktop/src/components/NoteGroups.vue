@@ -118,6 +118,16 @@ function noteKindLabel(kind: NoteKind): string {
   return { finding: "结论", risk: "风险", link: "入口" }[kind];
 }
 
+function formatTime(value: string): string {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date(value));
+}
+
 async function selectAdjacentSheet(event: KeyboardEvent, index: number) {
   const buttons = (event.currentTarget as HTMLElement)
     .closest<HTMLElement>(".sheet-tabs")
@@ -253,6 +263,10 @@ defineExpose({ revealNote });
                 :note-refs="noteRefs"
                 @activate="$emit('reference', $event)"
               />
+            </div>
+            <div class="note-timestamps" aria-label="记录时间">
+              <span>创建 <time :datetime="note.created_at">{{ formatTime(note.created_at) }}</time></span>
+              <span>更新 <time :datetime="note.updated_at">{{ formatTime(note.updated_at) }}</time></span>
             </div>
           </div>
         </article>

@@ -86,6 +86,7 @@ export interface BoardNote {
   body: string | null;
   metric: string | null;
   created_at: string;
+  updated_at: string;
   superseded_by: number | null;
   superseded_at: string | null;
   supersedes: number[];

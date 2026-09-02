@@ -590,18 +590,25 @@ def test_unknown_symbol_falls_back_to_whole_file(store, symbol_repo):
     assert stale['state'] == 'stale'
     assert stale['moved'] == ['core.py']
 
-def test_editing_wording_sends_a_concept_back_for_realignment(store, shared):
+def test_editing_wording_sends_a_concept_back_for_realignment(store, shared, monkeypatch):
+    clock = {'value': '2026-09-02T01:00:00+00:00'}
+    monkeypatch.setattr('taskboard.store.now_iso', lambda: clock['value'])
     concept = store.add_concept(
         str(shared), '措辞有歧义的标题', body='原来的理由', files=['sync.py:sync'],
         project='alpha')
+
+    clock['value'] = '2026-09-02T02:00:00+00:00'
     store.align_concept(concept['id'])
 
+    clock['value'] = '2026-09-02T03:00:00+00:00'
     edited = store.update_concept(concept['id'], title='改清楚之后的标题')
 
     # 人当初点头认的是旧那句话,换了说法等于还没看过
     assert edited['state'] == 'proposed'
     assert edited['alignment_reset'] is True
     assert edited['aligned_commit'] is None
+    assert edited['created_at'] == '2026-09-02T01:00:00+00:00'
+    assert edited['updated_at'] == clock['value']
 
 
 def test_keep_aligned_survives_a_pure_rewording(store, shared):
@@ -697,6 +704,28 @@ def test_notes_split_by_kind_and_gates_exclude_done(store):
 
     updated = store.set_note_category(finding['id'], '部署状态')
     assert updated['category'] == '部署状态'
+
+
+def test_note_tracks_created_and_updated_time(store, monkeypatch):
+    clock = {'value': '2026-09-02T01:00:00+00:00'}
+    monkeypatch.setattr('taskboard.store.now_iso', lambda: clock['value'])
+
+    note = store.add_note('demo', 'finding', '时间口径', category='产品原则')
+    assert note['created_at'] == clock['value']
+    assert note['updated_at'] == clock['value']
+
+    clock['value'] = '2026-09-02T02:00:00+00:00'
+    categorized = store.set_note_category(note['id'], '交付状态')
+    assert categorized['created_at'] == '2026-09-02T01:00:00+00:00'
+    assert categorized['updated_at'] == clock['value']
+
+    clock['value'] = '2026-09-02T03:00:00+00:00'
+    settled = store.settle_note(note['id'])
+    assert settled['updated_at'] == clock['value']
+
+    clock['value'] = '2026-09-02T04:00:00+00:00'
+    restored = store.unsettle_note(note['id'])
+    assert restored['updated_at'] == clock['value']
 
 
 def test_invalid_status_and_kind_rejected(store):
