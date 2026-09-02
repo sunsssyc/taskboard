@@ -12,7 +12,7 @@ import MarkdownBlock from "./MarkdownBlock.vue";
 import ReferenceText from "./ReferenceText.vue";
 import { buildNoteSheets, countSettled } from "../noteSheets";
 import type { BoardReference } from "../references";
-import type { BoardNote } from "../types";
+import type { BoardNote, NoteKind } from "../types";
 
 const props = defineProps<{
   projectKey: string;
@@ -114,6 +114,10 @@ function toggleNote(id: number) {
   else openNotes.add(id);
 }
 
+function noteKindLabel(kind: NoteKind): string {
+  return { finding: "结论", risk: "风险", link: "入口" }[kind];
+}
+
 async function selectAdjacentSheet(event: KeyboardEvent, index: number) {
   const buttons = (event.currentTarget as HTMLElement)
     .closest<HTMLElement>(".sheet-tabs")
@@ -171,7 +175,7 @@ defineExpose({ revealNote });
           :key="sheet.id"
           type="button"
           class="sheet-tab"
-          :class="[`sheet-${sheet.kind}`, { active: sheet.id === activeSheet?.id }]"
+          :class="{ active: sheet.id === activeSheet?.id }"
           role="tab"
           :aria-selected="sheet.id === activeSheet?.id"
           :aria-controls="`note-sheet-panel-${index}`"
@@ -191,8 +195,8 @@ defineExpose({ revealNote });
     <div class="sheet-workbook">
       <header class="panel-heading">
         <div>
-          <h2>约束性结论</h2>
-          <span class="eyebrow">按主题切换，后续决策以当前事实为准</span>
+          <h2>主题记录</h2>
+          <span class="eyebrow">结论、风险与入口按主题归档</span>
         </div>
         <span class="panel-count">
           <button
@@ -210,7 +214,6 @@ defineExpose({ revealNote });
         v-if="activeSheet"
         :id="`note-sheet-panel-${activeSheetIndex}`"
         class="sheet-panel"
-        :class="`sheet-panel-${activeSheet.kind}`"
         role="tabpanel"
         :aria-labelledby="`note-sheet-tab-${activeSheetIndex}`"
         tabindex="0"
@@ -219,7 +222,7 @@ defineExpose({ revealNote });
           v-for="note in activeSheet.notes"
           :key="note.id"
           class="note-row"
-          :class="{ open: isOpen(note), superseded: note.is_superseded, settled: note.is_settled }"
+          :class="[`note-kind-${note.kind}`, { open: isOpen(note), superseded: note.is_superseded, settled: note.is_settled }]"
           :data-note-id="note.id"
         >
           <button
@@ -230,6 +233,7 @@ defineExpose({ revealNote });
           >
             <span class="disclosure" :class="{ open: isOpen(note) }" aria-hidden="true"></span>
             <span class="note-id">[{{ note.id }}]</span>
+            <span class="note-kind-badge" :class="`kind-${note.kind}`">{{ noteKindLabel(note.kind) }}</span>
             <strong>{{ note.title }}</strong>
             <span v-if="note.metric" class="note-metric">{{ note.metric }}</span>
           </button>

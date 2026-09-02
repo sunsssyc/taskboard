@@ -29,7 +29,7 @@ export type BoardSearchQuery =
   | { kind: "text"; needle: string }
   | { kind: "task-id"; id: number }
   | { kind: "note-id"; id: number }
-  | { kind: "any-id"; id: number };
+  | { kind: "any-id"; id: number; needle: string };
 
 export function parseSearchQuery(query: string): BoardSearchQuery {
   const trimmed = query.trim();
@@ -39,7 +39,9 @@ export function parseSearchQuery(query: string): BoardSearchQuery {
   const noteId = trimmed.match(/^\[(\d+)\]$/);
   if (noteId) return { kind: "note-id", id: Number(noteId[1]) };
 
-  if (/^\d+$/.test(trimmed)) return { kind: "any-id", id: Number(trimmed) };
+  if (/^\d+$/.test(trimmed)) {
+    return { kind: "any-id", id: Number(trimmed), needle: normalized(trimmed) };
+  }
   return { kind: "text", needle: normalized(trimmed) };
 }
 
@@ -49,23 +51,18 @@ function asSearchQuery(query: string | BoardSearchQuery): BoardSearchQuery {
 
 export function resolveSearchQuery(
   query: string,
-  projects: BoardProject[],
+  _projects: BoardProject[],
 ): BoardSearchQuery {
   const parsed = parseSearchQuery(query);
-  if (parsed.kind !== "any-id") return parsed;
-
-  const nodeExists = projects.some((project) =>
-    project.tasks.some((task) => task.ref === parsed.id)
-    || [...project.findings, ...project.risks, ...project.links]
-      .some((note) => note.id === parsed.id),
-  );
-  return nodeExists ? parsed : { kind: "text", needle: normalized(query.trim()) };
+  return parsed;
 }
 
 export function taskMatches(task: BoardTask, query: string | BoardSearchQuery): boolean {
   const parsed = asSearchQuery(query);
-  if (parsed.kind === "task-id" || parsed.kind === "any-id") return task.ref === parsed.id;
+  if (parsed.kind === "task-id") return task.ref === parsed.id;
   if (parsed.kind === "note-id") return false;
+
+  if (parsed.kind === "any-id" && task.ref === parsed.id) return true;
 
   const { needle } = parsed;
   if (!needle) return true;
@@ -83,8 +80,10 @@ export function taskMatches(task: BoardTask, query: string | BoardSearchQuery): 
 
 export function noteMatches(note: BoardNote, query: string | BoardSearchQuery): boolean {
   const parsed = asSearchQuery(query);
-  if (parsed.kind === "note-id" || parsed.kind === "any-id") return note.id === parsed.id;
+  if (parsed.kind === "note-id") return note.id === parsed.id;
   if (parsed.kind === "task-id") return false;
+
+  if (parsed.kind === "any-id" && note.id === parsed.id) return true;
 
   const { needle } = parsed;
   if (!needle) return true;
@@ -192,17 +191,27 @@ export const useBoardStore = defineStore("board", () => {
 
   function filteredTasks(project: BoardProject): BoardTask[] {
     const wholeProjectMatches = projectMatches(project, effectiveSearchQuery.value);
-    return project.tasks.filter((task) => {
+    const matches = project.tasks.filter((task) => {
       if (statusFilter.value && task.status !== statusFilter.value) return false;
       if (ownerFilter.value && task.owner !== ownerFilter.value) return false;
       return wholeProjectMatches || taskMatches(task, effectiveSearchQuery.value);
     });
+    if (effectiveSearchQuery.value.kind === "any-id") {
+      const { id } = effectiveSearchQuery.value;
+      matches.sort((left, right) => Number(right.ref === id) - Number(left.ref === id));
+    }
+    return matches;
   }
 
   function filteredNotes(project: BoardProject, notes: BoardNote[]): BoardNote[] {
     if (statusFilter.value || ownerFilter.value) return [];
     if (projectMatches(project, effectiveSearchQuery.value)) return notes;
-    return notes.filter((note) => noteMatches(note, effectiveSearchQuery.value));
+    const matches = notes.filter((note) => noteMatches(note, effectiveSearchQuery.value));
+    if (effectiveSearchQuery.value.kind === "any-id") {
+      const { id } = effectiveSearchQuery.value;
+      matches.sort((left, right) => Number(right.id === id) - Number(left.id === id));
+    }
+    return matches;
   }
 
   function filteredFindings(project: BoardProject): BoardNote[] {

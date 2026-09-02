@@ -1,8 +1,7 @@
-import type { BoardNote, NoteKind } from "./types";
+import type { BoardNote } from "./types";
 
 export interface NoteSheet {
   id: string;
-  kind: NoteKind;
   category: string;
   label: string;
   notes: BoardNote[];
@@ -35,33 +34,14 @@ export function buildNoteSheets(
 ): NoteSheet[] {
   const keep = (notes: BoardNote[]) =>
     includeSettled ? notes : notes.filter((n) => !n.is_settled);
-  const sheets: NoteSheet[] = [];
-  for (const group of grouped(keep(findings))) {
-    sheets.push({
-      id: `finding:${group.category}`,
-      kind: "finding",
-      category: group.category,
-      label: group.category,
-      notes: group.notes,
-    });
-  }
-  for (const group of grouped(keep(risks))) {
-    sheets.push({
-      id: `risk:${group.category}`,
-      kind: "risk",
-      category: group.category,
-      label: `风险 · ${group.category}`,
-      notes: group.notes,
-    });
-  }
-  for (const group of grouped(keep(links))) {
-    sheets.push({
-      id: `link:${group.category}`,
-      kind: "link",
-      category: group.category,
-      label: `入口 · ${group.category}`,
-      notes: group.notes,
-    });
-  }
-  return sheets;
+  return grouped([
+    ...keep(findings),
+    ...keep(risks),
+    ...keep(links),
+  ]).map((group) => ({
+    id: group.category,
+    category: group.category,
+    label: group.category,
+    notes: group.notes,
+  }));
 }

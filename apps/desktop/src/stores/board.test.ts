@@ -202,13 +202,13 @@ describe("board search", () => {
   });
 
   it("parses plain, task, and note ID queries", () => {
-    expect(parseSearchQuery("262")).toEqual({ kind: "any-id", id: 262 });
+    expect(parseSearchQuery("262")).toEqual({ kind: "any-id", id: 262, needle: "262" });
     expect(parseSearchQuery(" #262 ")).toEqual({ kind: "task-id", id: 262 });
     expect(parseSearchQuery("[262]")).toEqual({ kind: "note-id", id: 262 });
     expect(parseSearchQuery("262 修复")).toEqual({ kind: "text", needle: "262 修复" });
   });
 
-  it("matches IDs against the node itself instead of body references", () => {
+  it("matches plain digits against both exact IDs and body text", () => {
     const sourceTask = demoSnapshot.projects[0].tasks[0];
     const targetTask = { ...sourceTask, ref: 262, detail: "目标任务" };
     const referencedTask = { ...sourceTask, ref: 292, detail: "后续按 #262 推进" };
@@ -217,9 +217,9 @@ describe("board search", () => {
     const referencedNote = { ...sourceNote, id: 292, body: "后续按 [262] 的方向补齐" };
 
     expect(taskMatches(targetTask, "262")).toBe(true);
-    expect(taskMatches(referencedTask, "262")).toBe(false);
+    expect(taskMatches(referencedTask, "262")).toBe(true);
     expect(noteMatches(targetNote, "262")).toBe(true);
-    expect(noteMatches(referencedNote, "262")).toBe(false);
+    expect(noteMatches(referencedNote, "262")).toBe(true);
     expect(taskMatches(targetTask, "#262")).toBe(true);
     expect(noteMatches(targetNote, "#262")).toBe(false);
     expect(noteMatches(targetNote, "[262]")).toBe(true);
@@ -237,7 +237,7 @@ describe("board search", () => {
     project!.findings = [{ ...sourceNote, id: 292, body: "固定导出 3000 条" }];
 
     expect(resolveSearchQuery("3000", snapshot.projects))
-      .toEqual({ kind: "text", needle: "3000" });
+      .toEqual({ kind: "any-id", id: 3000, needle: "3000" });
 
     const board = useBoardStore();
     board.snapshot = snapshot;
@@ -253,15 +253,15 @@ describe("board search", () => {
     expect(board.matchingFindings).toEqual([]);
   });
 
-  it("filters the selected project to the exact note ID", () => {
+  it("prioritizes the exact note ID while keeping text matches", () => {
     const snapshot = structuredClone(demoSnapshot);
     const project = snapshot.projects.find((item) => item.key === "reg-calibration");
     expect(project).toBeDefined();
 
     const sourceNote = project!.findings[0];
     project!.findings = [
-      { ...sourceNote, id: 262, title: "目标结论", body: "目标正文" },
       { ...sourceNote, id: 292, title: "引用结论", body: "后续按 [262] 的方向补齐" },
+      { ...sourceNote, id: 262, title: "目标结论", body: "目标正文" },
     ];
 
     const board = useBoardStore();
@@ -270,7 +270,7 @@ describe("board search", () => {
     board.query = "262";
 
     expect(board.matchingTasks).toEqual([]);
-    expect(board.matchingFindings.map((note) => note.id)).toEqual([262]);
+    expect(board.matchingFindings.map((note) => note.id)).toEqual([262, 292]);
   });
 
   it("does not turn project metadata into an ID-wide match", () => {

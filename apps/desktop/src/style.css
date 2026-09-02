@@ -1501,10 +1501,22 @@ body.project-drag-active {
 }
 .note-row-head:hover { background: rgb(0 0 0 / 2%); }
 .note-row-head strong { min-width: 120px; flex: 1; overflow-wrap: anywhere; font-size: 12.5px; }
+.note-kind-badge {
+  flex: none;
+  padding: 1px 5px;
+  border-radius: 4px;
+  color: var(--ink-muted);
+  background: var(--sunken);
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.45;
+}
+.note-kind-badge.kind-risk { color: var(--active); background: var(--active-soft); }
+.note-kind-badge.kind-link { color: var(--done); background: var(--done-soft); }
 .note-metric { max-width: 40%; overflow: hidden; color: var(--ink-faint); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .note-body { padding: 1px 22px 12px 62px; color: var(--ink-body); }
-.sheet-panel-risk .note-row.open { background: linear-gradient(to right, var(--active-soft), var(--surface) 48%); }
-.sheet-panel-link .note-row.open { background: linear-gradient(to right, var(--done-soft), var(--surface) 48%); }
+.note-row.note-kind-risk.open { background: linear-gradient(to right, var(--active-soft), var(--surface) 48%); }
+.note-row.note-kind-link.open { background: linear-gradient(to right, var(--done-soft), var(--surface) 48%); }
 .note-row.superseded { opacity: 0.55; }
 .note-row.settled { opacity: 0.5; border-left: 2px solid var(--ink-faint); }
 .note-row.settled .note-row-head strong { font-weight: 500; }
