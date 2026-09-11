@@ -8,7 +8,6 @@ from __future__ import annotations
 import importlib
 import json
 import secrets
-import subprocess
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -28,20 +27,6 @@ def code_version() -> float:
     """包内 .py 的最新修改时间，作为代码版本号。"""
     package_dir = Path(__file__).resolve().parent
     return max((path.stat().st_mtime for path in package_dir.glob('*.py')), default=0.0)
-
-
-def _git_head(repo: str | None) -> str | None:
-    """单仓库任务完成时记录任务关联仓库 HEAD，而不是看板服务 cwd。"""
-    if not repo:
-        return None
-    try:
-        result = subprocess.run(
-            ['git', '-C', repo, 'rev-parse', '--short', 'HEAD'],
-            check=True, capture_output=True, text=True, timeout=3,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return result.stdout.strip() or None
 
 
 def make_handler(db_path: str, title: str, include_archived: bool, dev: bool = False,
@@ -244,6 +229,9 @@ def make_handler(db_path: str, title: str, include_archived: bool, dev: bool = F
                     detail = self._optional_text(data, 'detail')
                     accept = self._optional_text(data, 'accept', 2_000)
                     owner = self._optional_text(data, 'owner', 120)
+                    priority = data.get('priority', store_module.DEFAULT_PRIORITY)
+                    if not isinstance(priority, int) or isinstance(priority, bool):
+                        raise store_module.BoardError('priority 必须是 P0-P3 对应的整数 0-3')
                     repositories = self._text_list(data, 'repositories')
                     if store.project_repositories(project) and not repositories:
                         raise store_module.BoardError('请先确认并选择本任务关联仓库')
@@ -251,6 +239,7 @@ def make_handler(db_path: str, title: str, include_archived: bool, dev: bool = F
                     task = store.add_task(
                         project, title_value, detail=detail,
                         owner=owner, accept=accept, repositories=repositories,
+                        priority=priority,
                     )
                     self._json({'ok': True, 'project': project, 'ref': task['ref']}, 201)
                     return
@@ -274,12 +263,10 @@ def make_handler(db_path: str, title: str, include_archived: bool, dev: bool = F
                     status = self._required_text(data, 'status')
                     if status not in WEB_STATUSES:
                         raise store_module.BoardError('网页只允许 todo/active/waiting/done')
-                    task_repositories = store.task_repositories(project, ref)
-                    sha = (
-                        _git_head(task_repositories[0]['path'])
-                        if status == 'done' and len(task_repositories) == 1 else None
-                    )
-                    task = store.set_status(project, ref, status, commit_sha=sha)
+                    # 区间由 Store 逐仓库记录,网页端不再自己探 git
+                    task = store.set_status(project, ref, status)
+                    commits = store.task_commits(project, ref)
+                    sha = commits[0]['head_sha'] if len(commits) == 1 else None
                     self._json({'ok': True, 'project': project, 'ref': ref,
                                 'status': task['status'], 'commit': sha})
                     return

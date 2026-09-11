@@ -18,7 +18,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             configurationError = error
         }
         installStatusItem()
-        openBoard()
+        // 桌面版可用时壳只做菜单栏薄入口,登录启动不再自动弹窗。
+        if !desktopAppIsAvailable() {
+            openBoard()
+        }
     }
 
     func applicationShouldHandleReopen(
@@ -110,7 +113,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openBoard() {
+        if activateDesktopApp() { return }
         windowController?.showBoard()
+    }
+
+    private func runningDesktopApp() -> NSRunningApplication? {
+        NSRunningApplication.runningApplications(
+            withBundleIdentifier: DesktopAppLocator.bundleIdentifier
+        ).first
+    }
+
+    private func desktopAppIsAvailable() -> Bool {
+        runningDesktopApp() != nil || DesktopAppLocator.resolve() != nil
+    }
+
+    /// 优先唤起 Tauri 桌面看板;返回 false 表示桌面版不可用,调用方回退原生窗口。
+    private func activateDesktopApp() -> Bool {
+        if let running = runningDesktopApp() {
+            if #available(macOS 14.0, *) {
+                running.activate()
+            } else {
+                running.activate(options: [.activateIgnoringOtherApps])
+            }
+            return true
+        }
+        guard let appURL = DesktopAppLocator.resolve() else { return false }
+        let configuration = NSWorkspace.OpenConfiguration()
+        configuration.activates = true
+        NSWorkspace.shared.openApplication(at: appURL, configuration: configuration) {
+            [weak self] _, error in
+            guard error != nil else { return }
+            DispatchQueue.main.async {
+                self?.windowController?.showBoard()
+            }
+        }
+        return true
     }
 
     @objc private func reloadBoard() {
