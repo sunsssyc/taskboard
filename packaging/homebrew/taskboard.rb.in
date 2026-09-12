@@ -13,25 +13,31 @@ class Taskboard < Formula
 
   def install
     libexec.install "taskboard"
+    # `board skill-sync` 按 cli.py 上两级目录找 .agents/skills/taskboard,
+    # 所以 skill 放进 libexec;pkgshare/skill 是给 Cursor、Gemini 软链接用的稳定路径。
+    (libexec/".agents/skills").install ".agents/skills/taskboard"
+    pkgshare.install_symlink libexec/".agents/skills/taskboard" => "skill"
 
     launcher = libexec/"board"
     launcher.write <<~PYTHON
       #!#{formula_opt_bin("python@3.13")}/python3.13
+      import sys
+      sys.path.insert(0, "#{libexec}")
       from taskboard.cli import main
       raise SystemExit(main())
     PYTHON
     chmod 0755, launcher
     bin.install_symlink launcher
-
-    (pkgshare/"skill").install Dir[".agents/skills/taskboard/*"]
   end
 
   def caveats
     <<~EOS
-      The optional Agent Skill is installed at:
-        #{pkgshare}/skill
+      The Agent Skill is installed at #{pkgshare}/skill.
 
-      Example for Codex/Cursor-compatible discovery:
+      Sync it into Codex and Claude Code:
+        board skill-sync
+
+      Expose it to Cursor through ~/.agents/skills:
         mkdir -p ~/.agents/skills
         ln -sfn #{pkgshare}/skill ~/.agents/skills/taskboard
 
@@ -45,5 +51,9 @@ class Taskboard < Formula
     system bin/"board", "--db", database, "finding", "Formula works",
            "--category", "Packaging", "-p", "brew-test"
     assert_match "Packaging", shell_output("#{bin}/board --db #{database} notes -p brew-test")
+
+    ENV["CODEX_HOME"] = (testpath/"codex").to_s
+    system bin/"board", "skill-sync", "--target", "codex"
+    assert_path_exists testpath/"codex/skills/taskboard/SKILL.md"
   end
 end

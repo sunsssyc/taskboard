@@ -41,6 +41,9 @@ def test_prepare_homebrew_release_is_deterministic_and_complete(tmp_path):
     assert 'depends_on "python@3.13"' in formula
     assert 'license "MIT"' in formula
     assert '@REPOSITORY@' not in formula and '@SHA256@' not in formula
+    # skill 装进 libexec/.agents/skills,brew 安装后 board skill-sync 才找得到源目录
+    assert '(libexec/".agents/skills").install ".agents/skills/taskboard"' in formula
+    assert 'skill-sync' in formula
 
 
 def test_prepare_homebrew_release_rejects_mismatched_version(tmp_path):

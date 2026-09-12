@@ -23,25 +23,22 @@ flowchart TD
 
 ## 安装
 
-### Homebrew（公开仓库发布后）
-
-与 CCSwitch CLI 相同，Taskboard 使用第三方 tap 发布：
+### Homebrew
 
 ```bash
-brew tap <github-owner>/tap
-brew install taskboard
+brew install sunsssyc/tap/taskboard
 ```
 
-升级与卸载：
+Homebrew 6.0 起第三方 tap 必须显式信任；带 tap 前缀安装只信任这一个 Formula，不需要先
+`brew tap` 或 `brew trust`。升级与卸载：
 
 ```bash
 brew upgrade taskboard
 brew uninstall taskboard
 ```
 
-当前仓库尚未关联公开 GitHub remote，因此 `<github-owner>` 仍是发布时参数；本地 Formula、
-MIT License、确定性源码归档和 tap 自动更新 workflow 已就绪。Formula 安装 `board` CLI 和
-Agent Skill，不会创建或覆盖 `~/.taskboard/board.db`。
+Formula 安装 `board` CLI 和 Agent Skill，不会创建或覆盖 `~/.taskboard/board.db`。skill 的
+接入方式见下文「让 AI Agent 自动使用」。
 
 ### 从源码安装
 
@@ -53,13 +50,18 @@ pip install -e /path/to/taskboard
 
 ## 让 AI Agent 自动使用
 
-仓库内置标准 Agent Skill: `.agents/skills/taskboard`。先安装上面的 `board` CLI，
-再在 taskboard 仓库根目录执行对应命令。
+仓库内 `.agents/skills/taskboard` 是唯一维护源；Homebrew 安装时它随包放在
+`$(brew --prefix)/share/taskboard/skill`。先安装上面的 `board` CLI，`board skill-sync` 在
+任意目录都能运行；Cursor 和 Gemini CLI 的软链接需要先按安装方式取 skill 目录：
+
+```bash
+TASKBOARD_SKILL="/path/to/taskboard/.agents/skills/taskboard"  # 源码安装
+TASKBOARD_SKILL="$(brew --prefix)/share/taskboard/skill"        # Homebrew 安装
+```
 
 ### Codex / Claude Code
 
-仓库内 `.agents/skills/taskboard` 是唯一维护源。把它同步到 Codex 桌面端和 Claude Code 的
-全局 skill 目录：
+把 skill 同步到 Codex 桌面端和 Claude Code 的全局 skill 目录：
 
 ```bash
 board skill-sync
@@ -76,9 +78,8 @@ board skill-sync --dry-run
 Cursor 打开本仓库时会自动发现 `.agents/skills`。要让 skill 在所有项目可用：
 
 ```bash
-TASKBOARD_ROOT="$(pwd)"
 mkdir -p "$HOME/.agents/skills"
-ln -sfn "$TASKBOARD_ROOT/.agents/skills/taskboard" "$HOME/.agents/skills/taskboard"
+ln -sfn "$TASKBOARD_SKILL" "$HOME/.agents/skills/taskboard"
 ```
 
 ### Gemini CLI
@@ -87,9 +88,8 @@ Gemini CLI 使用 `GEMINI.md` 上下文文件，而不是 Agent Skills 目录。
 导入同一份 `SKILL.md`：
 
 ```bash
-TASKBOARD_ROOT="$(pwd)"
 mkdir -p "$HOME/.gemini"
-ln -sfn "$TASKBOARD_ROOT/.agents/skills/taskboard/SKILL.md" "$HOME/.gemini/taskboard.md"
+ln -sfn "$TASKBOARD_SKILL/SKILL.md" "$HOME/.gemini/taskboard.md"
 touch "$HOME/.gemini/GEMINI.md"
 grep -Fqx '@./taskboard.md' "$HOME/.gemini/GEMINI.md" || \
   printf '\n@./taskboard.md\n' >> "$HOME/.gemini/GEMINI.md"
@@ -415,7 +415,7 @@ sha 是否还在仓库里,rebase/squash 之后明说失效而不是给出错误�
 
 ### 发布 Homebrew Formula
 
-首次发布前准备两个公开仓库：`<owner>/taskboard` 与 `<owner>/homebrew-tap`，后者包含
+首次发布前准备两个公开仓库：`sunsssyc/taskboard` 与 `sunsssyc/homebrew-tap`，后者包含
 `Formula/` 目录。在源码仓库设置 `HOMEBREW_TAP_TOKEN`，令其只对 `homebrew-tap` 有
 `contents:write` 权限。
 
@@ -425,13 +425,13 @@ sha 是否还在仓库里,rebase/squash 之后明说失效而不是给出错误�
 1. 运行 Python 测试。
 2. 生成确定性的 `taskboard-<version>.tar.gz` 与真实 SHA-256。
 3. 创建 GitHub Release。
-4. 更新 `<owner>/homebrew-tap` 的 `Formula/taskboard.rb`。
+4. 更新 `sunsssyc/homebrew-tap` 的 `Formula/taskboard.rb`。
 
 本地可先生成发布物：
 
 ```bash
 python3 scripts/prepare_homebrew_release.py \
-  --repository <owner>/taskboard \
+  --repository sunsssyc/taskboard \
   --output-dir dist/homebrew
 ```
 
