@@ -9,7 +9,7 @@ description: 用 board CLI 查看和更新跨对话的需求/工作流看板。�
 不是代码仓库；执行任务位于需求之下，仓库是需求和任务的关联标签与交付坐标。数据默认存放在
 `~/.taskboard/board.db`，也可以用 `TASKBOARD_HOME` 或全局 `--db` 覆盖。
 
-如果还没有 `board` 命令，先在 claude-taskboard 源码目录执行：
+如果还没有 `board` 命令，先在 taskboard 源码目录执行：
 
 ```bash
 python -m pip install -e .

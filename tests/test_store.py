@@ -171,7 +171,7 @@ def test_shared_repository_requires_explicit_workstream(store, tmp_path):
 
 
 def test_move_repository_keeps_existing_task_associations(store, tmp_path):
-    old = tmp_path / 'claude-taskboard'
+    old = tmp_path / 'old-board'
     old.mkdir()
     store.create_project('tb', '看板', repositories=[str(old)])
     task = store.add_task('tb', '既有任务')
@@ -184,7 +184,7 @@ def test_move_repository_keeps_existing_task_associations(store, tmp_path):
 
     result = store.move_repository(str(old), str(new))
 
-    assert result['previous_name'] == 'claude-taskboard'
+    assert result['previous_name'] == 'old-board'
     assert (result['projects'], result['tasks'], result['merged']) == (['tb'], 1, False)
     assert [row['name'] for row in store.project_repositories('tb')] == ['taskboard']
     assert [row['path'] for row in store.project_repositories('tb')] == [str(new)]

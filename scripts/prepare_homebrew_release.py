@@ -62,8 +62,8 @@ def main() -> int:
 
     output_dir = (root / args.output_dir).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    archive = output_dir / f"claude-taskboard-{version}.tar.gz"
-    prefix = f"claude-taskboard-{version}/"
+    archive = output_dir / f"taskboard-{version}.tar.gz"
+    prefix = f"taskboard-{version}/"
 
     with tempfile.TemporaryDirectory(prefix="taskboard-release-") as temp_dir:
         tar_path = Path(temp_dir) / "source.tar"

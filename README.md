@@ -1,4 +1,4 @@
-# claude-taskboard
+# taskboard
 
 面向个人与 AI 编程助手的跨对话需求/工作流看板。CLI 更新进度,本地服务实时查看,或导出
 自包含 HTML 发到任何地方。它不是多人协作、权限管理或云同步系统。
@@ -46,7 +46,7 @@ Agent Skill，不会创建或覆盖 `~/.taskboard/board.db`。
 ### 从源码安装
 
 ```bash
-pip install -e /path/to/claude-taskboard
+pip install -e /path/to/taskboard
 ```
 
 得到全局命令 `board`。数据库位置可用 `TASKBOARD_HOME` 覆盖。
@@ -54,7 +54,7 @@ pip install -e /path/to/claude-taskboard
 ## 让 AI Agent 自动使用
 
 仓库内置标准 Agent Skill: `.agents/skills/taskboard`。先安装上面的 `board` CLI，
-再在 claude-taskboard 仓库根目录执行对应命令。
+再在 taskboard 仓库根目录执行对应命令。
 
 ### Codex / Cursor
 
@@ -359,7 +359,7 @@ npm run tauri dev
 它按路径集合做增删,旧路径不在新集合里就当成解除关联,会被"仓库仍被任务使用"挡下。
 
 ```bash
-board repo-move claude-taskboard ~/Documents/GitHub/taskboard
+board repo-move taskboard ~/Documents/GitHub/taskboard
 ```
 
 新路径不存在时会拒绝执行(防拼错),确认无误可加 `--force`；新路径已经登记成另一个仓库时,
@@ -408,7 +408,7 @@ sha 是否还在仓库里,rebase/squash 之后明说失效而不是给出错误�
 
 ### 发布 Homebrew Formula
 
-首次发布前准备两个公开仓库：`<owner>/claude-taskboard` 与 `<owner>/homebrew-tap`，后者包含
+首次发布前准备两个公开仓库：`<owner>/taskboard` 与 `<owner>/homebrew-tap`，后者包含
 `Formula/` 目录。在源码仓库设置 `HOMEBREW_TAP_TOKEN`，令其只对 `homebrew-tap` 有
 `contents:write` 权限。
 
@@ -416,7 +416,7 @@ sha 是否还在仓库里,rebase/squash 之后明说失效而不是给出错误�
 [release workflow](.github/workflows/release.yml) 会：
 
 1. 运行 Python 测试。
-2. 生成确定性的 `claude-taskboard-<version>.tar.gz` 与真实 SHA-256。
+2. 生成确定性的 `taskboard-<version>.tar.gz` 与真实 SHA-256。
 3. 创建 GitHub Release。
 4. 更新 `<owner>/homebrew-tap` 的 `Formula/taskboard.rb`。
 
@@ -424,7 +424,7 @@ sha 是否还在仓库里,rebase/squash 之后明说失效而不是给出错误�
 
 ```bash
 python3 scripts/prepare_homebrew_release.py \
-  --repository <owner>/claude-taskboard \
+  --repository <owner>/taskboard \
   --output-dir dist/homebrew
 ```
 
