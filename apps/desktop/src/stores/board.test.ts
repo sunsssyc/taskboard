@@ -31,8 +31,17 @@ vi.mock("../board", () => ({
   saveTaskPriority: vi.fn(async () => {}),
   saveTaskStatus: vi.fn(async () => {}),
   saveProjectArchived: vi.fn(async () => {}),
+  alignConcept: vi.fn(async (id: number) => ({
+    id, state: "aligned", aligned_commit: "abc1234", title: "概念",
+  })),
+  rejectConcept: vi.fn(async (id: number) => ({ id, state: "rejected", title: "概念" })),
+  updateConcept: vi.fn(async (id: number) => ({
+    id, state: "proposed", title: "概念", alignment_reset: true,
+  })),
 }));
+import { alignConcept, rejectConcept, updateConcept } from "../board";
 import {
+  conceptMatches,
   moveProjectOrder,
   noteMatches,
   projectMatches,
@@ -239,5 +248,68 @@ describe("board search", () => {
   it("moves projects before or after the drop target", () => {
     expect(moveProjectOrder(["a", "b", "c"], "c", "a", true)).toEqual(["c", "a", "b"]);
     expect(moveProjectOrder(["a", "b", "c"], "a", "b", false)).toEqual(["b", "a", "c"]);
+  });
+});
+
+
+describe("concept cards", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
+
+  it("matches by title, body, anchor and bracketed id", () => {
+    const concept = demoSnapshot.projects[0].concepts[0];
+    expect(conceptMatches(concept, "锚点提交")).toBe(true);
+    expect(conceptMatches(concept, "_concept_state")).toBe(true);
+    expect(conceptMatches(concept, "[330]")).toBe(true);
+    expect(conceptMatches(concept, "不存在的词")).toBe(false);
+  });
+
+  it("filters concepts with the query but hides them under status or owner filters", () => {
+    const board = useBoardStore();
+    board.snapshot = structuredClone(demoSnapshot);
+    const project = board.projects[0];
+    expect(board.filteredConcepts(project).length).toBe(project.concepts.length);
+    board.query = "moved_anchors";
+    expect(board.filteredConcepts(project).map((c) => c.id)).toEqual([330]);
+    board.query = "";
+    board.statusFilter = "done";
+    expect(board.filteredConcepts(project)).toEqual([]);
+  });
+
+  it("counts pending concepts once even when shared across projects", () => {
+    const board = useBoardStore();
+    const snapshot = structuredClone(demoSnapshot);
+    snapshot.projects[1].concepts = [structuredClone(snapshot.projects[0].concepts[0])];
+    board.snapshot = snapshot;
+    // demo 里 330 待对齐、327 需重新对齐;330 在两个需求里出现只算一次
+    expect(board.pendingConceptCount).toBe(2);
+  });
+
+  it("aligns through the backend, reloads and reports the anchored commit", async () => {
+    const board = useBoardStore();
+    const ok = await board.alignConcept(330);
+    expect(ok).toBe(true);
+    expect(alignConcept).toHaveBeenCalledWith(330, undefined);
+    expect(loadBoardSnapshot).toHaveBeenCalledTimes(1);
+    expect(board.actionNotice).toContain("abc1234");
+    expect(board.conceptBusy).toBeNull();
+  });
+
+  it("keeps the error and skips reload when rejecting fails", async () => {
+    vi.mocked(rejectConcept).mockRejectedValueOnce(new Error("否决要给理由"));
+    const board = useBoardStore();
+    const ok = await board.rejectConcept(330, "");
+    expect(ok).toBe(false);
+    expect(board.actionError).toContain("否决要给理由");
+    expect(loadBoardSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("tells the user when an edit reset the alignment", async () => {
+    const board = useBoardStore();
+    await board.editConcept(330, { title: "新说法" });
+    expect(updateConcept).toHaveBeenCalledWith(330, { title: "新说法" });
+    expect(board.actionNotice).toContain("退回待对齐");
   });
 });

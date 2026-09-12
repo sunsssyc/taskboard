@@ -1327,6 +1327,22 @@ class Store:
                 hits.append(entry)
         return hits
 
+    def concept_cards(self, project: str) -> list[dict]:
+        """看板用的概念卡:含已否决,带出处任务编号;待对齐与需重新对齐排最前。"""
+        order = {'proposed': 0, 'stale': 0, 'aligned': 1, 'rejected': 2}
+        entries = self.concepts(project=project, include_rejected=True)
+        for entry in entries:
+            entry['task_ref'] = None
+            entry['task_project'] = None
+            if entry['task_id']:
+                task = self.conn.execute(
+                    'SELECT ref, project FROM tasks WHERE id = ?', (entry['task_id'],),
+                ).fetchone()
+                if task:
+                    entry['task_ref'] = task['ref']
+                    entry['task_project'] = task['project']
+        return sorted(entries, key=lambda entry: (order[entry['state']], entry['id']))
+
     def concepts_proposed_by(self, task_id: int) -> list[dict]:
         """这个任务提出来的概念——"引入了新概念"最直接的证据,不用问 git。"""
         rows = self.conn.execute(
@@ -1597,6 +1613,8 @@ class Store:
                 'findings': self._note_dicts(key, 'finding'),
                 'risks': self._note_dicts(key, 'risk'),
                 'links': self._note_dicts(key, 'link'),
+                # 概念按仓库共享:同仓库下别的需求提的概念在这里同样可见
+                'concepts': self.concept_cards(key),
                 'updated_at': project['updated_at'],
             })
         return data

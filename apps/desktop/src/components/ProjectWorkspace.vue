@@ -1,11 +1,13 @@
 <script setup lang="ts">
+import ConceptCards from "./ConceptCards.vue";
 import NoteGroups from "./NoteGroups.vue";
 import TaskGroups from "./TaskGroups.vue";
-import type { BoardNote, BoardProject, BoardTask } from "../types";
+import type { BoardConcept, BoardNote, BoardProject, BoardTask } from "../types";
 
 defineProps<{
   project: BoardProject;
   tasks: BoardTask[];
+  concepts: BoardConcept[];
   findings: BoardNote[];
   risks: BoardNote[];
   links: BoardNote[];
@@ -13,7 +15,7 @@ defineProps<{
   singleProject: boolean;
 }>();
 
-defineEmits<{ showAll: [] }>();
+defineEmits<{ showAll: []; focusTask: [ref: number] }>();
 </script>
 
 <template>
@@ -40,6 +42,14 @@ defineEmits<{ showAll: [] }>();
     </header>
 
     <TaskGroups :tasks="tasks" :project-key="project.key" :query="query" />
+
+    <ConceptCards
+      :key="`${project.key}:concepts`"
+      :project-key="project.key"
+      :concepts="concepts"
+      :query="query"
+      @focus-task="$emit('focusTask', $event)"
+    />
 
     <NoteGroups
       :key="`${project.key}:notes`"

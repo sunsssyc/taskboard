@@ -6,6 +6,7 @@ import ProjectWorkspace from "./components/ProjectWorkspace.vue";
 import { useBoardStore } from "./stores/board";
 import type { TaskCounts, TaskStatus } from "./types";
 import { createAutoRefresh } from "./refresh";
+import { subscribeBoardChanges } from "./board";
 import { ownerLabel } from "./owner";
 import {
   applyZoom,
@@ -47,6 +48,8 @@ const {
   owners,
   viewPrefs,
   preferenceError,
+  pendingConceptCount,
+  writeEnabled,
 } = storeToRefs(board);
 
 const globalCounts = computed<TaskCounts>(() => {
@@ -141,6 +144,8 @@ function onZoomShortcut(event: KeyboardEvent) {
 const autoRefresh = createAutoRefresh(() => void board.load(), {
   isBusy: () => loading.value,
 });
+// board serve 模式下 CLI 一改 2 秒内刷新;桌面端与演示模式里是空操作
+let stopChangeSubscription: () => void = () => {};
 
 function onVisibilityChange() {
   autoRefresh.onVisible();
@@ -152,9 +157,13 @@ onMounted(() => {
   window.addEventListener("keydown", onZoomShortcut);
   document.addEventListener("visibilitychange", onVisibilityChange);
   autoRefresh.start();
+  stopChangeSubscription = subscribeBoardChanges(() => {
+    if (!loading.value) void board.load();
+  });
 });
 
 onBeforeUnmount(() => {
+  stopChangeSubscription();
   autoRefresh.stop();
   document.removeEventListener("visibilitychange", onVisibilityChange);
   window.removeEventListener("keydown", onZoomShortcut);
@@ -180,6 +189,7 @@ onBeforeUnmount(() => {
         <span>待办 {{ globalCounts.todo }}</span>
         <span>可开工 {{ actionableCount }}</span>
         <span>闸门 {{ gateCount }}</span>
+        <span v-if="pendingConceptCount" class="global-meta-pending">待对齐概念 {{ pendingConceptCount }}</span>
       </div>
     </header>
 
@@ -243,7 +253,7 @@ onBeforeUnmount(() => {
         <div v-if="loading && !snapshot" class="center-state" aria-live="polite">
           <span class="spinner" aria-hidden="true"></span>
           <strong>正在读取任务状态</strong>
-          <span>通过只读 board export 加载本地数据库…</span>
+          <span>正在读取本地 SQLite 看板…</span>
         </div>
 
         <div v-else-if="error && !snapshot" class="center-state error-state" role="alert">
@@ -255,7 +265,10 @@ onBeforeUnmount(() => {
 
         <template v-else>
           <div v-if="source.includes('演示')" class="demo-banner">
-            当前为浏览器演示数据；运行 <code>npm run tauri dev</code> 后读取真实本地看板。
+            当前为浏览器演示数据；运行 <code>npm run tauri dev</code> 或 <code>board serve</code> 后读取真实本地看板。
+          </div>
+          <div v-else-if="!writeEnabled" class="demo-banner">
+            当前监听地址不是本机 loopback，看板只读；写入请回到本机 <code>board serve</code> 或桌面端。
           </div>
           <div v-else-if="error" class="inline-error" role="alert">
             刷新失败，继续显示上一次数据：{{ error }}
@@ -279,12 +292,14 @@ onBeforeUnmount(() => {
             :key="project.key"
             :project="project"
             :tasks="board.filteredTasks(project)"
+            :concepts="board.filteredConcepts(project)"
             :findings="board.filteredFindings(project)"
             :risks="board.filteredRisks(project)"
             :links="board.filteredLinks(project)"
             :query="query"
             :single-project="Boolean(selectedProjectKey)"
             @show-all="board.selectAllProjects"
+            @focus-task="focusTask"
           />
 
           <div v-if="!displayProjects.length" class="center-state compact-empty">

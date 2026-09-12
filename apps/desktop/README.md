@@ -1,16 +1,22 @@
-# Taskboard Desktop POC
+# Taskboard Desktop
 
-Tauri v2 + Vue 3 + TypeScript + Pinia 的桌面验证。它保留 Python `board` CLI、
-SQLite 数据模型和现有 Swift 菜单栏 App，不在 Vue 或 Rust 中复制依赖判断、事件记录或写入语义。
+Tauri v2 + Vue 3 + TypeScript + Pinia 的桌面版,同一份 Vue 页面也由 `board serve` 托管。
+它保留 Python `board` CLI、SQLite 数据模型和现有 Swift 菜单栏 App,不在 Vue 或 Rust 中
+复制依赖判断、事件记录或写入语义。
 
 ## 数据链路
 
 ```text
 读取  Vue UI → Tauri load_board command → board export --json → SQLite
 状态  Vue UI → Tauri set_task_status command → board todo/start/wait/done → SQLite
+概念  Vue UI → Tauri align_concept / reject_concept / update_concept → board align / concept-edit --json
 派发  Vue UI → Tauri dispatch_task_agent → Codex app-server / Claude 官方深链
 记录  Tauri → board agent-run → SQLite agent_runs
 ```
+
+同一套页面也给 `board serve` 用:`src/board.ts` 按 `window.__TAURI_INTERNALS__` /
+`window.__TASKBOARD_WEB__` 判断后端,网页模式走同源 `/api/*` 接口(CSRF token 由
+serve 注入页面),桌面模式走 Tauri command,两者都没有时用内置演示数据。
 
 Rust 侧只允许 `export --json --show-paths --out -` 读取，以及与 `board serve` 网页同一
 白名单的状态切换（待办/进行中/等人工/完成，不含放弃）：点击任务状态胶囊弹出菜单，
@@ -39,6 +45,12 @@ npm run dev
 
 # Tauri 桌面窗口：读取 ~/.taskboard/board.db
 npm run tauri dev
+
+# 给 board serve 的构建：输出到 ../../taskboard/web,文件名不带 hash,需一起提交
+npm run build:web
+
+# 对着运行中的 board serve(默认 8787)开发网页模式:/api 代理过去,页面上下文从 /api/session 取
+npm run dev:web
 ```
 
 可覆盖数据和 Python 入口：
@@ -92,8 +104,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 npm run tauri build -- --no-bundle   # 只验证编译时可跳过打包
 ```
 
-当前 POC 已按成熟看板视觉迁移全局统计、搜索、状态/负责人筛选、全部/单需求切换、需求置顶/
-拖动排序、需求任务大纲、任务 spine、任务详情折叠与结论/风险多 Sheet 切换，并覆盖 375px、
-1440px、1600px 三档布局。结论一次只展示当前主题，风险与关键入口作为语义 Sheet；任务状态
-切换通过 CLI 白名单命令完成；负责人可直接修改，任务可另行派发给本地 Codex 或 Claude，
-新建/放弃/结论等写入仍在 CLI。
+页面覆盖全局统计、搜索、状态/负责人筛选、全部/单需求切换、需求置顶与拖动排序、需求任务
+大纲、任务列表与详情折叠、概念卡区、结论按主题分 Sheet,并在 375px、1440px、1600px 三档
+宽度下验证过无横向溢出。任务状态切换只走 CLI 白名单子命令;新建、放弃、依赖、结论等写入
+仍在 CLI。
