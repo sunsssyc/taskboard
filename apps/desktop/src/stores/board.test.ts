@@ -1,0 +1,315 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPinia, setActivePinia } from "pinia";
+import { demoSnapshot } from "../demo";
+import {
+  dispatchTaskAgent,
+  loadBoardSnapshot,
+  saveProjectArchived,
+  saveTaskOwner,
+  saveTaskPriority,
+  saveTaskStatus,
+} from "../board";
+
+vi.mock("../board", () => ({
+  loadBoardSnapshot: vi.fn(async () => ({
+    snapshot: { generated_at: "", db: "", projects: [] },
+    source: "测试桥接",
+    viewPrefs: { order: [], pinned: [] },
+  })),
+  saveBoardViewPrefs: vi.fn(async (prefs: unknown) => prefs),
+  dispatchTaskAgent: vi.fn(async () => ({
+    provider: "codex",
+    dispatchId: "codex-test",
+    repositoryPath: "/Users/demo/taskboard",
+    status: "submitted",
+    externalThreadId: "thread-test",
+    externalTurnId: "turn-test",
+    startedAt: "2026-08-27T00:00:00+00:00",
+    warning: null,
+  })),
+  saveTaskOwner: vi.fn(async () => {}),
+  saveTaskPriority: vi.fn(async () => {}),
+  saveTaskStatus: vi.fn(async () => {}),
+  saveProjectArchived: vi.fn(async () => {}),
+  alignConcept: vi.fn(async (id: number) => ({
+    id, state: "aligned", aligned_commit: "abc1234", title: "概念",
+  })),
+  rejectConcept: vi.fn(async (id: number) => ({ id, state: "rejected", title: "概念" })),
+  updateConcept: vi.fn(async (id: number) => ({
+    id, state: "proposed", title: "概念", alignment_reset: true,
+  })),
+}));
+import { alignConcept, rejectConcept, updateConcept } from "../board";
+import {
+  conceptMatches,
+  moveProjectOrder,
+  noteMatches,
+  projectMatches,
+  sortProjectsByPrefs,
+  taskMatches,
+  useBoardStore,
+} from "./board";
+
+describe("task status switch", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
+
+  it("delegates to the CLI bridge and reloads the snapshot", async () => {
+    const board = useBoardStore();
+    await board.setTaskStatus("taskboard", 26, "done");
+    expect(saveTaskStatus).toHaveBeenCalledWith("taskboard", 26, "done");
+    expect(loadBoardSnapshot).toHaveBeenCalledTimes(1);
+    expect(board.actionError).toBe("");
+  });
+
+  it("surfaces bridge failures without dropping current data", async () => {
+    vi.mocked(saveTaskStatus).mockRejectedValueOnce(new Error("CLI 不可用"));
+    const board = useBoardStore();
+    board.snapshot = demoSnapshot;
+    await board.setTaskStatus("taskboard", 26, "active");
+    expect(board.actionError).toContain("CLI 不可用");
+    expect(board.snapshot).toStrictEqual(demoSnapshot);
+    expect(loadBoardSnapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe("project completion", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
+
+  it("archives the selected project and returns to the active project list", async () => {
+    vi.useFakeTimers();
+    const board = useBoardStore();
+    board.snapshot = demoSnapshot;
+    board.selectProject("taskboard");
+
+    await board.setProjectArchived("taskboard", true);
+
+    expect(saveProjectArchived).toHaveBeenCalledWith("taskboard", true);
+    expect(board.selectedProjectKey).toBe("");
+    expect(board.actionNotice).toContain("仍有 6 项未完成任务");
+    expect(loadBoardSnapshot).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(board.actionNotice).toBe("");
+    vi.useRealTimers();
+  });
+
+  it("separates archived projects from the normal sidebar collection", () => {
+    const board = useBoardStore();
+    board.snapshot = structuredClone(demoSnapshot);
+    board.snapshot.projects[0].archived = true;
+
+    expect(board.projects.map((project) => project.key)).toEqual(["reg-calibration"]);
+    expect(board.archivedProjects.map((project) => project.key)).toEqual(["taskboard"]);
+  });
+
+  it("restores a completed project through the same bridge", async () => {
+    vi.useFakeTimers();
+    const board = useBoardStore();
+    await board.setProjectArchived("taskboard", false);
+
+    expect(saveProjectArchived).toHaveBeenCalledWith("taskboard", false);
+    expect(board.actionNotice).toContain("已恢复");
+
+    await vi.advanceTimersByTimeAsync(1400);
+    expect(board.actionNotice).toBe("");
+    vi.useRealTimers();
+  });
+});
+
+describe("task owner switch", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
+
+  it("delegates assignment to the CLI bridge and reloads the snapshot", async () => {
+    const board = useBoardStore();
+    await board.setTaskOwner("taskboard", 32, "我");
+    expect(saveTaskOwner).toHaveBeenCalledWith("taskboard", 32, "我");
+    expect(loadBoardSnapshot).toHaveBeenCalledTimes(1);
+    expect(board.actionError).toBe("");
+  });
+
+  it("supports clearing an assignment", async () => {
+    const board = useBoardStore();
+    await board.setTaskOwner("taskboard", 32, "");
+    expect(saveTaskOwner).toHaveBeenCalledWith("taskboard", 32, "");
+  });
+});
+
+describe("task priority switch", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
+
+  it("persists the new priority through the CLI bridge and reloads", async () => {
+    const board = useBoardStore();
+    await board.setTaskPriority("taskboard", 24, 0);
+    expect(saveTaskPriority).toHaveBeenCalledWith("taskboard", 24, 0);
+    expect(loadBoardSnapshot).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("task Agent dispatch", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
+
+  it("keeps assignment and actual dispatch as separate actions", async () => {
+    const board = useBoardStore();
+    const task = demoSnapshot.projects[0].tasks[0];
+    await board.dispatchTask("taskboard", task, "codex", "/Users/demo/taskboard");
+
+    expect(dispatchTaskAgent).toHaveBeenCalledWith(expect.objectContaining({
+      provider: "codex",
+      project: "taskboard",
+      reference: task.ref,
+      repositoryPath: "/Users/demo/taskboard",
+    }));
+    expect(saveTaskOwner).not.toHaveBeenCalled();
+    expect(board.actionNotice).toContain("Codex 已接收");
+    expect(loadBoardSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces dispatch failures and clears busy state", async () => {
+    vi.mocked(dispatchTaskAgent).mockRejectedValueOnce(new Error("未安装 Claude 桌面应用"));
+    const board = useBoardStore();
+    const task = demoSnapshot.projects[0].tasks[0];
+    await board.dispatchTask("taskboard", task, "claude", "/Users/demo/taskboard");
+
+    expect(board.actionError).toContain("未安装 Claude");
+    expect(board.dispatchingTask).toBe("");
+    expect(loadBoardSnapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe("board search", () => {
+  beforeEach(() => setActivePinia(createPinia()));
+
+  it("matches task metadata and repository names", () => {
+    const task = demoSnapshot.projects[0].tasks[0];
+    expect(taskMatches(task, "tauri")).toBe(true);
+    expect(taskMatches(task, "taskboard")).toBe(true);
+    expect(taskMatches(task, "P0")).toBe(true);
+    expect(taskMatches(task, "不存在")).toBe(false);
+  });
+
+  it("matches note categories and metrics", () => {
+    const note = demoSnapshot.projects[0].findings[0];
+    expect(noteMatches(note, "产品结构")).toBe(true);
+    expect(noteMatches(note, "6 个需求")).toBe(true);
+  });
+
+  it("keeps selected project and search state in one store", () => {
+    const board = useBoardStore();
+    board.snapshot = demoSnapshot;
+    board.selectProject("reg-calibration");
+    board.query = "概率";
+    expect(board.selectedProject?.key).toBe("reg-calibration");
+    expect(board.matchingTasks.map((task) => task.ref)).toEqual([27]);
+  });
+
+  it("searches project metadata as a whole-project match", () => {
+    const project = demoSnapshot.projects[1];
+    expect(projectMatches(project, "coinex_backend")).toBe(true);
+    expect(projectMatches(project, "不存在")).toBe(false);
+  });
+
+  it("supports all-project, status, and owner filters", () => {
+    const board = useBoardStore();
+    board.snapshot = demoSnapshot;
+    expect(board.selectedProject).toBeNull();
+    expect(board.displayProjects).toHaveLength(2);
+
+    board.statusFilter = "active";
+    expect(board.filteredTasks(demoSnapshot.projects[0]).map((task) => task.ref)).toEqual([26]);
+
+    board.statusFilter = "";
+    board.ownerFilter = "双方";
+    expect(board.filteredTasks(demoSnapshot.projects[0]).map((task) => task.ref)).toEqual([18]);
+  });
+
+  it("sorts pinned projects before the remembered order", () => {
+    const ordered = sortProjectsByPrefs(demoSnapshot.projects, {
+      order: ["reg-calibration", "taskboard"],
+      pinned: ["taskboard"],
+    });
+    expect(ordered.map((project) => project.key)).toEqual(["taskboard", "reg-calibration"]);
+  });
+
+  it("moves projects before or after the drop target", () => {
+    expect(moveProjectOrder(["a", "b", "c"], "c", "a", true)).toEqual(["c", "a", "b"]);
+    expect(moveProjectOrder(["a", "b", "c"], "a", "b", false)).toEqual(["b", "a", "c"]);
+  });
+});
+
+
+describe("concept cards", () => {
+  beforeEach(() => {
+    setActivePinia(createPinia());
+    vi.clearAllMocks();
+  });
+
+  it("matches by title, body, anchor and bracketed id", () => {
+    const concept = demoSnapshot.projects[0].concepts[0];
+    expect(conceptMatches(concept, "锚点提交")).toBe(true);
+    expect(conceptMatches(concept, "_concept_state")).toBe(true);
+    expect(conceptMatches(concept, "[330]")).toBe(true);
+    expect(conceptMatches(concept, "不存在的词")).toBe(false);
+  });
+
+  it("filters concepts with the query but hides them under status or owner filters", () => {
+    const board = useBoardStore();
+    board.snapshot = structuredClone(demoSnapshot);
+    const project = board.projects[0];
+    expect(board.filteredConcepts(project).length).toBe(project.concepts.length);
+    board.query = "moved_anchors";
+    expect(board.filteredConcepts(project).map((c) => c.id)).toEqual([330]);
+    board.query = "";
+    board.statusFilter = "done";
+    expect(board.filteredConcepts(project)).toEqual([]);
+  });
+
+  it("counts pending concepts once even when shared across projects", () => {
+    const board = useBoardStore();
+    const snapshot = structuredClone(demoSnapshot);
+    snapshot.projects[1].concepts = [structuredClone(snapshot.projects[0].concepts[0])];
+    board.snapshot = snapshot;
+    // demo 里 330 待对齐、327 需重新对齐;330 在两个需求里出现只算一次
+    expect(board.pendingConceptCount).toBe(2);
+  });
+
+  it("aligns through the backend, reloads and reports the anchored commit", async () => {
+    const board = useBoardStore();
+    const ok = await board.alignConcept(330);
+    expect(ok).toBe(true);
+    expect(alignConcept).toHaveBeenCalledWith(330, undefined);
+    expect(loadBoardSnapshot).toHaveBeenCalledTimes(1);
+    expect(board.actionNotice).toContain("abc1234");
+    expect(board.conceptBusy).toBeNull();
+  });
+
+  it("keeps the error and skips reload when rejecting fails", async () => {
+    vi.mocked(rejectConcept).mockRejectedValueOnce(new Error("否决要给理由"));
+    const board = useBoardStore();
+    const ok = await board.rejectConcept(330, "");
+    expect(ok).toBe(false);
+    expect(board.actionError).toContain("否决要给理由");
+    expect(loadBoardSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("tells the user when an edit reset the alignment", async () => {
+    const board = useBoardStore();
+    await board.editConcept(330, { title: "新说法" });
+    expect(updateConcept).toHaveBeenCalledWith(330, { title: "新说法" });
+    expect(board.actionNotice).toContain("退回待对齐");
+  });
+});

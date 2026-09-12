@@ -50,7 +50,7 @@ jobs:
         run: |
           version="${GITHUB_REF_NAME#v}"
           gh release create "$GITHUB_REF_NAME" \
-            "dist/homebrew/claude-taskboard-${version}.tar.gz" \
+            "dist/homebrew/taskboard-${version}.tar.gz" \
             --generate-notes \
             --title "Taskboard ${version}"
 

@@ -93,6 +93,67 @@ func runSelfTests() throws {
         ]
     )
 
+    func makeFakeApp(named name: String, identifier: String) throws -> URL {
+        let appURL = root.appendingPathComponent(name, isDirectory: true)
+        try fileManager.createDirectory(
+            at: appURL.appendingPathComponent("Contents"),
+            withIntermediateDirectories: true
+        )
+        let plist: [String: Any] = ["CFBundleIdentifier": identifier]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: plist,
+            format: .xml,
+            options: 0
+        )
+        try data.write(to: appURL.appendingPathComponent("Contents/Info.plist"))
+        return appURL
+    }
+
+    let desktopApp = try makeFakeApp(
+        named: "Taskboard Desktop.app",
+        identifier: DesktopAppLocator.bundleIdentifier
+    )
+    let shellApp = try makeFakeApp(
+        named: "Taskboard.app",
+        identifier: "com.coinex.taskboard.menubar"
+    )
+    try expect(
+        DesktopAppLocator.resolve(
+            environment: ["TASKBOARD_DESKTOP_APP": desktopApp.path],
+            bundleAppPath: nil,
+            homeDirectory: root,
+            candidatePaths: []
+        ) == desktopApp.standardizedFileURL,
+        "环境变量没有解析出桌面看板 App"
+    )
+    try expect(
+        DesktopAppLocator.resolve(
+            environment: [:],
+            bundleAppPath: desktopApp.path,
+            homeDirectory: root,
+            candidatePaths: []
+        ) == desktopApp.standardizedFileURL,
+        "Info.plist 注入路径没有解析出桌面看板 App"
+    )
+    try expect(
+        DesktopAppLocator.resolve(
+            environment: ["TASKBOARD_DESKTOP_APP": shellApp.path],
+            bundleAppPath: nil,
+            homeDirectory: root,
+            candidatePaths: [shellApp.path]
+        ) == nil,
+        "bundle id 校验失败:菜单栏壳自身被当成桌面看板"
+    )
+    try expect(
+        DesktopAppLocator.resolve(
+            environment: [:],
+            bundleAppPath: nil,
+            homeDirectory: root,
+            candidatePaths: []
+        ) == nil,
+        "没有候选时应返回 nil 以回退原生窗口"
+    )
+
     let monitor = BoardDatabaseMonitor(databaseURL: database)
     let before = monitor.currentVersion()
     try run(
