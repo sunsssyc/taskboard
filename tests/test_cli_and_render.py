@@ -204,7 +204,7 @@ def test_cli_multi_repo_task_requires_explicit_repository(db, tmp_path, capsys):
 
 
 def test_cli_repo_move_restores_cwd_detection_after_rename(db, tmp_path, monkeypatch, capsys):
-    old = tmp_path / 'claude-taskboard'
+    old = tmp_path / 'old-board'
     old.mkdir()
     other = tmp_path / 'other'
     other.mkdir()
@@ -221,9 +221,9 @@ def test_cli_repo_move_restores_cwd_detection_after_rename(db, tmp_path, monkeyp
     assert run(db, 'set', '-p', 'tb', '--repo', str(new)) == 1
     assert '仍被任务' in capsys.readouterr().err
 
-    assert run(db, 'repo-move', 'claude-taskboard', str(new)) == 0
+    assert run(db, 'repo-move', 'old-board', str(new)) == 0
     out = capsys.readouterr().out
-    assert 'claude-taskboard' in out and str(new) in out and '任务关联 1 条' in out
+    assert 'old-board' in out and str(new) in out and '任务关联 1 条' in out
 
     assert run(db, 'ls') == 0
     assert '既有任务' in capsys.readouterr().out
