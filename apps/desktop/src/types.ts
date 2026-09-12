@@ -95,6 +95,41 @@ export interface BoardNote {
   is_settled: boolean;
 }
 
+export type ConceptState = "proposed" | "aligned" | "stale" | "rejected";
+
+export interface ConceptAnchor {
+  repository: string;
+  repository_path: string | null;
+  path: string;
+  symbol: string;
+}
+
+/** 概念卡:代码概念归仓库、跨需求共享;需求概念只归需求。状态由锚点提交现算。 */
+export interface BoardConcept {
+  id: number;
+  project: string;
+  category: string | null;
+  title: string;
+  body: string | null;
+  repository: string | null;
+  repository_path: string | null;
+  task_ref: number | null;
+  task_project: string | null;
+  files: ConceptAnchor[];
+  moved: string[];
+  state: ConceptState;
+  aligned_at: string | null;
+  aligned_commit: string | null;
+  rejected_at: string | null;
+  created_at: string;
+}
+
+export interface ConceptEdit {
+  title?: string;
+  body?: string;
+  keepAligned?: boolean;
+}
+
 export interface BoardProject {
   key: string;
   name: string;
@@ -110,6 +145,7 @@ export interface BoardProject {
   findings: BoardNote[];
   risks: BoardNote[];
   links: BoardNote[];
+  concepts: BoardConcept[];
   updated_at: string;
 }
 
@@ -128,4 +164,14 @@ export interface BoardLoadResponse {
   snapshot: BoardSnapshot;
   source: string;
   viewPrefs: ViewPrefs;
+  /** 只有 board serve 会明确给出;桌面端与演示模式视为可写。 */
+  writeEnabled?: boolean;
+}
+
+/** board serve 注入到页面的上下文;不存在时说明不是网页模式。 */
+export interface WebContext {
+  csrf: string;
+  writeEnabled: boolean;
+  title: string;
+  dev: boolean;
 }

@@ -596,6 +596,10 @@ def cmd_concept_edit(store: Store, args) -> int:
         args.id, title=args.title, body=args.why, files=args.file,
         category=args.category, keep_aligned=args.keep_aligned,
     )
+    if args.json:
+        # 桌面端桥接用:拿到整张卡而不是解析终端文案
+        print(json.dumps(entry, ensure_ascii=False))
+        return 0
     print_concept(entry, verbose=True)
     if entry.get('alignment_reset'):
         print(paint('  措辞变了,已退回待对齐——你当初点头认的是旧那句话', DIM))
@@ -606,10 +610,16 @@ def cmd_concept_edit(store: Store, args) -> int:
 def cmd_align(store: Store, args) -> int:
     if args.reject:
         entry = store.reject_concept(args.id, args.reject)
+        if args.json:
+            print(json.dumps(entry, ensure_ascii=False))
+            return 0
         print(f'已否决 [{entry["id"]}] {entry["title"]}')
         print(paint(f'  理由 {args.reject}', DIM))
         return 0
     entry = store.align_concept(args.id, note=args.note)
+    if args.json:
+        print(json.dumps(entry, ensure_ascii=False))
+        return 0
     print(f'已对齐 [{entry["id"]}] {entry["title"]}')
     print(paint(f'  锚在 {entry["repository"]} {entry["aligned_commit"]},'
                 f'之后锚点文件动过会提示重新对齐', DIM))
@@ -1052,7 +1062,8 @@ def cmd_export(store: Store, args) -> int:
 def cmd_serve(store: Store, args) -> int:
     from .serve import serve
     serve(store, host=args.host, port=args.port, title=args.title,
-          include_archived=args.all, open_browser=args.open, dev=args.dev)
+          include_archived=args.all, open_browser=args.open, dev=args.dev,
+          web_dir=args.web_dir)
     return 0
 
 
@@ -1283,6 +1294,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument('--category')
     sp.add_argument('--keep-aligned', dest='keep_aligned', action='store_true',
                     help='只改了说法、意思没变时保留已对齐状态')
+    sp.add_argument('--json', action='store_true', help='输出整张概念卡 JSON(桌面端桥接用)')
     sp.set_defaults(func=cmd_concept_edit)
 
     sp = sub.add_parser('align', help='人确认理解了这个概念(或否决它)')
@@ -1290,6 +1302,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument('--note', help='对齐时想补一句')
     sp.add_argument('--reject', metavar='理由',
                     help='否决:不算新概念,或方案本身不对')
+    sp.add_argument('--json', action='store_true', help='输出整张概念卡 JSON(桌面端桥接用)')
     sp.set_defaults(func=cmd_align)
 
     sp = sub.add_parser('notes', help='列结论/尾巴/文件(默认只列活跃的)')
@@ -1358,6 +1371,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument('--open', action='store_true', help='顺便打开浏览器')
     sp.add_argument('--dev', action='store_true',
                     help='开发模式:改代码免重启,保存后页面自动刷新')
+    sp.add_argument('--web-dir',
+                    help='前端构建目录(默认 taskboard/web,其次 apps/desktop/dist)')
     sp.set_defaults(func=cmd_serve)
 
     sp = sub.add_parser('skill-sync', help='把仓库内 taskboard skill 同步到 Agent 工具目录')

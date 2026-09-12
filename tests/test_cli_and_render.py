@@ -958,3 +958,24 @@ def test_cli_export_bridge_flag(db, tmp_path, capsys):
     plain_out = tmp_path / 'plain.html'
     assert run(db, 'export', '--out', str(plain_out)) == 0
     assert 'class="chip todo status-button"' not in plain_out.read_text(encoding='utf-8')
+
+
+def test_cli_align_and_concept_edit_can_emit_json_for_desktop_bridge(db, tmp_path, capsys):
+    repo = tmp_path / 'svc'
+    repo.mkdir()
+    subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+    run(db, 'init', 'alpha', '--repo', str(repo))
+    run(db, 'concept', '增量对账用水位线', '--why', '全量扫描随数据增长', '-p', 'alpha')
+    capsys.readouterr()
+
+    run(db, 'concept-edit', '1', '--title=水位线只扫增量', '--json')
+    edited = json.loads(capsys.readouterr().out)
+    assert edited['title'] == '水位线只扫增量' and edited['state'] == 'proposed'
+
+    run(db, 'align', '1', '--json', '--note=看过了')
+    aligned = json.loads(capsys.readouterr().out)
+    assert aligned['state'] == 'aligned'
+
+    run(db, 'align', '1', '--json', '--reject=-不算新概念')
+    rejected = json.loads(capsys.readouterr().out)
+    assert rejected['state'] == 'rejected'

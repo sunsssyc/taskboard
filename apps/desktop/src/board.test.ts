@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { demoSnapshot } from "./demo";
-import { normalizeTaskPriorities, simulateBrowserAgentDispatch } from "./board";
+import {
+  detectBackend,
+  normalizeSnapshot,
+  normalizeTaskPriorities,
+  simulateBrowserAgentDispatch,
+  simulateConceptAction,
+  subscribeBoardChanges,
+} from "./board";
 
 describe("browser Agent dispatch demo", () => {
   it("records a simulated Codex run without launching a desktop Agent", () => {
@@ -51,5 +58,96 @@ describe("priority snapshot compatibility", () => {
     delete (snapshot.projects[0].tasks[0] as { priority?: number }).priority;
 
     expect(normalizeTaskPriorities(snapshot).projects[0].tasks[0].priority).toBe(2);
+  });
+});
+
+describe("snapshot compatibility", () => {
+  it("fills in concepts for snapshots from a CLI that predates concept cards", () => {
+    const snapshot = structuredClone(demoSnapshot);
+    delete (snapshot.projects[0] as { concepts?: unknown }).concepts;
+    expect(normalizeSnapshot(snapshot).projects[0].concepts).toEqual([]);
+  });
+});
+
+// vitest 跑在 node 环境,没有 window;按需塞一个最小的
+function stubWindow(fields: Partial<Window> = {}) {
+  vi.stubGlobal("window", { ...fields });
+}
+
+describe("backend detection", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("falls back to demo data when there is no window at all", () => {
+    expect(detectBackend()).toBe("demo");
+  });
+
+  it("prefers Tauri, then the board serve page context, then demo data", () => {
+    stubWindow();
+    expect(detectBackend()).toBe("demo");
+    stubWindow({ __TASKBOARD_WEB__: { csrf: "t", writeEnabled: true, title: "看板", dev: false } });
+    expect(detectBackend()).toBe("web");
+    stubWindow({ __TAURI_INTERNALS__: {}, __TASKBOARD_WEB__: { csrf: "t", writeEnabled: true, title: "看板", dev: false } });
+    expect(detectBackend()).toBe("tauri");
+  });
+});
+
+describe("concept demo actions", () => {
+  it("aligns, rejects and edits in place with the CLI's rules", () => {
+    const snapshot = structuredClone(demoSnapshot);
+    const aligned = simulateConceptAction(snapshot, 330, "align");
+    expect(aligned.state).toBe("aligned");
+    expect(aligned.aligned_commit).toBe("demo1234");
+
+    // 改措辞退回待对齐;勾了 keepAligned 才保留
+    expect(simulateConceptAction(snapshot, 330, "edit", { edit: { title: "换说法" } }).state)
+      .toBe("proposed");
+    simulateConceptAction(snapshot, 330, "align");
+    expect(simulateConceptAction(snapshot, 330, "edit", {
+      edit: { body: "补一句", keepAligned: true },
+    }).state).toBe("aligned");
+
+    expect(() => simulateConceptAction(snapshot, 330, "reject", { reason: " " }))
+      .toThrow("否决要给理由");
+    expect(simulateConceptAction(snapshot, 330, "reject", { reason: "不算新概念" }).state)
+      .toBe("rejected");
+    expect(() => simulateConceptAction(snapshot, 330, "align")).toThrow("已被否决");
+    expect(() => simulateConceptAction(snapshot, 999, "align")).toThrow("[999]");
+  });
+});
+
+describe("board serve change subscription", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("is a no-op outside the web backend", () => {
+    stubWindow();
+    const stop = subscribeBoardChanges(() => { throw new Error("不该被调用"); });
+    stop();
+  });
+
+  it("reloads data when the database changes and the page when the build changes", async () => {
+    vi.useFakeTimers();
+    stubWindow({ __TASKBOARD_WEB__: { csrf: "t", writeEnabled: true, title: "看板", dev: false } });
+    const versions = [
+      { board: "1", page: "a" },
+      { board: "1", page: "a" },
+      { board: "2", page: "a" },
+      { board: "2", page: "b" },
+    ];
+    const onChange = vi.fn();
+    const reloadPage = vi.fn();
+    const stop = subscribeBoardChanges(onChange, {
+      intervalMs: 10,
+      fetchVersion: async () => versions.shift() ?? { board: "2", page: "b" },
+      reloadPage,
+    });
+    for (let i = 0; i < 4; i += 1) await vi.advanceTimersByTimeAsync(10);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(reloadPage).toHaveBeenCalledTimes(1);
+    stop();
   });
 });

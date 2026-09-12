@@ -612,6 +612,135 @@ fn dispatch_task_agent(
     })
 }
 
+// ── 概念卡:对齐 / 否决 / 改措辞,全部映射到 CLI,状态判定与事件记录仍由 Python 负责 ──
+const CONCEPT_TITLE_LIMIT: usize = 60;
+const CONCEPT_BODY_LIMIT: usize = 400;
+
+fn database_prefix(database: Option<&str>) -> Vec<String> {
+    let mut args = Vec::new();
+    if let Some(database) = database.filter(|value| !value.trim().is_empty()) {
+        args.push("--db".into());
+        args.push(database.into());
+    }
+    args
+}
+
+/// 用 `--flag=value` 形式传值:值以 `-` 开头时 argparse 才不会当成另一个选项。
+fn concept_align_args(database: Option<&str>, id: u32, note: Option<&str>) -> Vec<String> {
+    let mut args = database_prefix(database);
+    args.extend(["align".into(), id.to_string(), "--json".into()]);
+    if let Some(note) = note.map(str::trim).filter(|value| !value.is_empty()) {
+        args.push(format!("--note={note}"));
+    }
+    args
+}
+
+fn concept_reject_args(database: Option<&str>, id: u32, reason: &str) -> Vec<String> {
+    let mut args = database_prefix(database);
+    args.extend([
+        "align".into(),
+        id.to_string(),
+        "--json".into(),
+        format!("--reject={reason}"),
+    ]);
+    args
+}
+
+fn concept_edit_args(
+    database: Option<&str>,
+    id: u32,
+    title: Option<&str>,
+    body: Option<&str>,
+    keep_aligned: bool,
+) -> Vec<String> {
+    let mut args = database_prefix(database);
+    args.extend(["concept-edit".into(), id.to_string(), "--json".into()]);
+    if let Some(title) = title {
+        args.push(format!("--title={title}"));
+    }
+    if let Some(body) = body {
+        args.push(format!("--why={body}"));
+    }
+    if keep_aligned {
+        args.push("--keep-aligned".into());
+    }
+    args
+}
+
+fn run_board_json(args: &[String], what: &str) -> Result<Value, String> {
+    let mut errors = Vec::new();
+    for attempt in command_attempts() {
+        match run_board(&attempt, args) {
+            Ok(stdout) => {
+                return serde_json::from_slice(&stdout)
+                    .map_err(|error| format!("{} 返回了无效 JSON：{}", attempt.source, error));
+            }
+            Err(error) => errors.push(error),
+        }
+    }
+    Err(format!("无法{what}。已尝试：\n{}", errors.join("\n")))
+}
+
+fn validated_concept_text(value: Option<String>, limit: usize, label: &str) -> Result<Option<String>, String> {
+    match value {
+        None => Ok(None),
+        Some(text) => {
+            let text = text.trim().to_owned();
+            if text.chars().count() > limit {
+                return Err(format!("{label}不能超过 {limit} 字"));
+            }
+            Ok(Some(text))
+        }
+    }
+}
+
+#[tauri::command]
+fn align_concept(id: u32, note: Option<String>) -> Result<Value, String> {
+    let database = env::var("TASKBOARD_DB").ok();
+    let args = concept_align_args(database.as_deref(), id, note.as_deref());
+    run_board_json(&args, "对齐概念")
+}
+
+#[tauri::command]
+fn reject_concept(id: u32, reason: String) -> Result<Value, String> {
+    let reason = reason.trim().to_owned();
+    if reason.is_empty() {
+        return Err("否决要给理由：是不算新概念，还是方案本身不对".into());
+    }
+    if reason.chars().count() > CONCEPT_BODY_LIMIT {
+        return Err(format!("否决理由不能超过 {CONCEPT_BODY_LIMIT} 字"));
+    }
+    let database = env::var("TASKBOARD_DB").ok();
+    let args = concept_reject_args(database.as_deref(), id, &reason);
+    run_board_json(&args, "否决概念")
+}
+
+#[tauri::command]
+fn update_concept(
+    id: u32,
+    title: Option<String>,
+    body: Option<String>,
+    keep_aligned: bool,
+) -> Result<Value, String> {
+    let title = validated_concept_text(title, CONCEPT_TITLE_LIMIT, "概念标题")?;
+    if matches!(title.as_deref(), Some("")) {
+        return Err("概念要有一句话标题".into());
+    }
+    let body = validated_concept_text(body, CONCEPT_BODY_LIMIT, "概念正文")?;
+    if title.is_none() && body.is_none() {
+        return Err("没有要改的内容".into());
+    }
+    let database = env::var("TASKBOARD_DB").ok();
+    let args = concept_edit_args(
+        database.as_deref(),
+        id,
+        title.as_deref(),
+        body.as_deref(),
+        keep_aligned,
+    );
+    run_board_json(&args, "修改概念卡")
+}
+
 #[tauri::command]
 fn save_view_prefs(
     state: tauri::State<'_, BridgeState>,
@@ -637,7 +766,10 @@ pub fn run() {
             set_project_archived,
             set_task_owner,
             set_task_priority,
-            set_task_status
+            set_task_status,
+            align_concept,
+            reject_concept,
+            update_concept
         ])
         .run(tauri::generate_context!())
         .expect("error while running Taskboard desktop");
@@ -886,6 +1018,42 @@ mod tests {
             "submitted"
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn concept_commands_map_to_cli_with_json_output() {
+        assert_eq!(
+            concept_align_args(Some("/tmp/db"), 330, Some(" 看过了 ")),
+            vec!["--db", "/tmp/db", "align", "330", "--json", "--note=看过了"]
+        );
+        assert_eq!(
+            concept_align_args(None, 330, Some("   ")),
+            vec!["align", "330", "--json"]
+        );
+        // 理由以 - 开头也必须原样传到 CLI,而不是被 argparse 当成选项
+        assert_eq!(
+            concept_reject_args(None, 12, "-不算新概念"),
+            vec!["align", "12", "--json", "--reject=-不算新概念"]
+        );
+        assert_eq!(
+            concept_edit_args(Some("/tmp/db"), 7, Some("新标题"), None, true),
+            vec!["--db", "/tmp/db", "concept-edit", "7", "--json", "--title=新标题", "--keep-aligned"]
+        );
+        assert_eq!(
+            concept_edit_args(None, 7, None, Some("为什么"), false),
+            vec!["concept-edit", "7", "--json", "--why=为什么"]
+        );
+    }
+
+    #[test]
+    fn concept_text_limits_match_python_store() {
+        let long_title: String = "字".repeat(CONCEPT_TITLE_LIMIT + 1);
+        assert!(validated_concept_text(Some(long_title), CONCEPT_TITLE_LIMIT, "概念标题").is_err());
+        assert_eq!(
+            validated_concept_text(Some("  短 ".into()), CONCEPT_TITLE_LIMIT, "概念标题").unwrap(),
+            Some("短".into())
+        );
+        assert_eq!(validated_concept_text(None, CONCEPT_BODY_LIMIT, "正文").unwrap(), None);
     }
 
     #[test]

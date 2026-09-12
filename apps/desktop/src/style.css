@@ -1671,3 +1671,102 @@ body.project-drag-active {
     animation-iteration-count: 1 !important;
   }
 }
+
+/* ── 概念对齐 ─────────────────────────────────────────────────────────── */
+.concept-panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 22px;
+}
+.concept-list {
+  overflow: hidden;
+  border: 1px solid var(--rule-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+.concept-card { position: relative; min-width: 0; border-bottom: 1px solid var(--rule-soft); }
+.concept-card:last-child { border-bottom: 0; }
+.concept-card.concept-proposed.open { box-shadow: inset 3px 0 var(--accent); }
+.concept-card.concept-stale.open { background: linear-gradient(to right, var(--active-soft), var(--surface) 42%); box-shadow: inset 3px 0 var(--active); }
+.concept-card.concept-rejected { opacity: 0.6; }
+.concept-card.busy { opacity: 0.65; pointer-events: none; }
+.concept-card-head {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 42px;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 13px 8px 18px;
+  border: 0;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+}
+.concept-card-head:hover { background: rgb(0 0 0 / 2%); }
+.concept-card-head strong { min-width: 120px; flex: 1; overflow-wrap: anywhere; font-size: 12.5px; }
+.concept-scope,
+.concept-state {
+  display: inline-flex;
+  height: 20px;
+  flex: none;
+  align-items: center;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.concept-scope { color: var(--ink-muted); background: var(--sunken); font-family: var(--mono); font-weight: 500; }
+.concept-scope.methodology { color: #6748aa; background: #f0ebfb; font-family: inherit; }
+.concept-state.state-proposed { color: var(--accent-hover); background: var(--accent-soft); }
+.concept-state.state-stale { color: #9b5000; background: var(--active-soft); }
+.concept-state.state-aligned { color: #176f33; background: var(--done-soft); }
+.concept-state.state-rejected { color: var(--ink-muted); background: var(--sunken); }
+.concept-body { padding: 1px 22px 14px 44px; color: var(--ink-body); }
+.concept-anchors { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 6px; }
+.concept-anchors code { display: inline-block; padding: 1px 7px; border-radius: 5px; background: var(--sunken); font-size: 11px; }
+.concept-anchors code.moved { color: #9b5000; background: var(--active-soft); }
+.concept-hint { margin: 8px 0 0; color: var(--ink-faint); font-size: 11px; }
+.concept-hint.stale { color: #9b5000; }
+.concept-hint code { font-size: 10.5px; }
+.concept-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 6px; color: var(--ink-faint); font-size: 10.5px; }
+.concept-task-link { padding: 0; border: 0; color: var(--accent); background: transparent; font-size: 10.5px; cursor: pointer; }
+.concept-task-link:hover { text-decoration: underline; }
+.concept-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.concept-actions .secondary-button.quiet { color: var(--ink-muted); border-color: transparent; }
+.concept-actions .secondary-button.quiet:hover { color: var(--alert); background: var(--alert-soft); }
+.danger-button {
+  min-height: 29px;
+  padding: 4px 12px;
+  border: 1px solid var(--alert);
+  border-radius: var(--radius-sm);
+  color: #fff;
+  background: var(--alert);
+  cursor: pointer;
+}
+.danger-button:disabled,
+.primary-button:disabled { opacity: 0.5; cursor: default; }
+.concept-edit,
+.concept-reject { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+.concept-edit label,
+.concept-reject label { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--ink-faint); }
+.concept-edit input[type="text"],
+.concept-edit textarea,
+.concept-reject input {
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  background: var(--surface);
+  font-size: 12.5px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.concept-edit-keep { flex-direction: row !important; align-items: center; gap: 6px !important; }
+.concept-empty { margin: 0; padding: 10px 18px; color: var(--ink-faint); font-size: 11.5px; }
+.concept-group.archive-group .archive-tasks .concept-card:first-child { border-top: 1px solid var(--rule-soft); }
+.global-meta-pending { color: var(--accent-hover); font-weight: 600; }

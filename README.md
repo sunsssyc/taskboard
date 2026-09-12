@@ -18,7 +18,7 @@ flowchart TD
     D --> E["沉淀<br/>finding / risk / link"]
     E --> F[("~/.taskboard/board.db<br/>SQLite 单一事实源")]
     F --> B
-    F --> G["CLI · HTML / JSON · macOS App"]
+    F --> G["CLI · 网页 / 桌面版 · 静态 HTML / JSON"]
 ```
 
 ## 安装
@@ -255,37 +255,57 @@ board note-category 12 18 --category "性能"  # 给已有记录归类
 ## 查看
 
 ```bash
-board serve --open        # localhost:8787,CLI 一改 2 秒内自动刷新；本机可轻量操作
-board export -p website-refresh --out board.html
+board serve --open        # 本机网页 localhost:8787,CLI 一改 2 秒内自动刷新,可轻量写入
+board export -p website-refresh --out board.html   # 静态 HTML,可发布
 board export --json --out board.json   # 给其他工具消费,默认同样隐藏本机路径
 board export --show-paths --out local.html  # 仅本地查看时保留数据库和仓库路径
 board set --artifact-url https://...   # 记住发布链接,export 时提醒复用
 ```
 
-`board serve` 的本机页面不再只是静态展示：可按关键词、状态和负责人筛选，打开任务详情
-查看正文、验收、依赖、分支/PR 与事件历史，也可执行开始/等人工/完成/退回，或轻量新增
-任务和 finding。标记完成前会再次展示验收条件；完成事件记录的是该项目登记仓库的 HEAD，
-不是看板服务自身目录的 HEAD。复杂的依赖、闸门、supersede 和长篇编辑仍建议使用 CLI 或
-让 AI Agent 操作，避免把看板变成重型编辑器。
+三种看法用两套渲染:
 
-搜索与筛选也会进入静态 HTML，但详情接口和全部写入控件只存在于 `board serve` 页面；
-`board export` 始终只读。
+| 入口 | 页面来源 | 数据链路 | 能写什么 |
+| --- | --- | --- | --- |
+| `board serve` 网页 | `apps/desktop` 的 Vue 页面 | 同源 HTTP 接口 | 与桌面版相同,不含派发 Agent |
+| Tauri 桌面版 | 同一份 Vue 页面 | Rust 调 `board` CLI | 状态、负责人、优先级、完成需求、概念卡、派发 Agent |
+| `board export` 静态 HTML | `taskboard/render.py` | 一次性导出 | 只读,不含概念卡 |
 
-导出的 HTML 自包含、无外部请求,可直接作为 Artifact 发布或丢进任何静态托管。
-默认隐藏数据库与仓库的本机绝对路径;明暗主题跟随系统,已完成的任务折进一个可展开区块,
-页面只显示剩余路径。
+### 网页与桌面版共用的页面
 
-发布前仍应检查内容:任务正文、结论、风险、分支名和链接会原样进入导出文件。
-用 `-p <key>` 只导出准备公开的项目。`board serve` 没有用户身份认证；写入只在
-`127.0.0.1`、`localhost` 或 `::1` 监听时启用，并校验 Host、Origin、进程级 CSRF、
-JSON 类型和请求体大小。绑定其他地址时页面自动只读，但仍不要把它直接暴露到公网或
-不可信局域网。
+页面按需求分区:任务在前,中间是概念对齐,最后是按主题分 Sheet 的结论。任务区按优先级
+排列可开工项,主区先展示前三项,其余折叠;点状态胶囊可切换 待办/进行中/等人工/完成,
+标记完成前会再次展示验收条件,完成事件记录的是该需求登记仓库的 HEAD。负责人、优先级
+可点开修改;需求可置顶、拖动排序、标记完成,这些偏好与 Swift 菜单栏 App 共享
+`*.view.json`。
+
+概念对齐区列出该需求可见的全部概念卡(同仓库下别的需求提的也在):待对齐与需重新对齐
+默认展开,已对齐与已否决折叠;需重新对齐的卡标出是哪个锚点变过。卡上可以对齐、否决
+(必须给理由)、改措辞,规则与 CLI 一致,改了措辞会退回待对齐。派发桌面 Agent 只在
+Tauri 版可用。复杂的依赖、闸门、supersede 和长篇编辑仍建议用 CLI 或让 Agent 操作。
+
+### `board serve` 怎么托管这个页面
+
+页面构建产物随包放在 `taskboard/web/`:`cd apps/desktop && npm run build:web` 生成,文件名
+不带 hash,内容没变就没有 diff;改了前端要重新构建并连同产物一起提交。运行时 `/api/board`
+返回整份快照与视图偏好,页面每 2 秒轮询 `/api/version`,数据库或构建产物变了就刷新。
+找不到产物时 `board serve` 返回 503 并给出构建命令,也可用 `--web-dir` 或
+`TASKBOARD_WEB_DIR` 指向别的构建目录;显式指了目录就只认它,不再回退。
+
+`board serve` 没有用户身份认证。写入只在 `127.0.0.1`、`localhost` 或 `::1` 监听时启用,
+并校验 Host、Origin、进程级 CSRF token、JSON 类型和请求体大小;绑定其他地址时页面自动
+只读,但仍不要把它暴露到公网或不可信局域网。
+
+### 静态导出
+
+`board export` 生成的 HTML 自包含、无外部请求,可直接作为 Artifact 发布或丢进任何静态
+托管;默认隐藏数据库与仓库的本机绝对路径,明暗主题跟随系统。发布前检查内容:任务正文、
+结论、风险、分支名和链接会原样进入导出文件,用 `-p <key>` 只导出准备公开的需求。
 
 ### macOS 菜单栏 App
 
-原生 AppKit/WebKit 菜单栏 App 复用同一个 SQLite 数据库和 `board export` 渲染逻辑,
-不需要常驻 HTTP 服务。窗口打开时监听 `board.db`、WAL 和 SHM 文件,CLI 修改后自动刷新;
-关闭终端不会影响 App。
+原生 AppKit/WebKit 菜单栏 App 复用同一个 SQLite 数据库,不需要常驻 HTTP 服务。它的
+壳内窗口用 `board export` 的静态渲染,窗口打开时监听 `board.db`、WAL 和 SHM 文件,
+CLI 修改后自动刷新;关闭终端不会影响 App。
 
 ```bash
 ./macos/TaskboardMenuBar/build_app.sh
@@ -309,16 +329,17 @@ macOS 13+ 的 `SMAppService`;首次启用后若系统要求批准,到“系统�
 图标母版位于 `macos/TaskboardMenuBar/Resources/AppIcon.png`。构建时
 `Scripts/make_icns.sh` 会生成 16px 到 1024px 的标准 `AppIcon.icns` 并装入 App。
 
-### Tauri + Vue 只读 POC
+### Tauri 桌面版
 
-`apps/desktop` 验证用 Tauri v2 + Vue 3 + TypeScript + Pinia 替换桌面展示层。POC 通过受限
-Rust command 调用 `board export --json`，保留现有 Python CLI、SQLite 数据模型和 Swift
-实现；当前已迁移成熟看板的全局统计、搜索、状态/负责人筛选、需求导航、任务路径与结论区，
-需求置顶和拖动排序与 Swift 版共享 `*.view.json`，结论按主题使用多 Sheet 切换；点击状态
-胶囊可切换 待办/进行中/等人工/完成（与 `board serve` 网页同一白名单，映射到 CLI 子命令
-执行，完成需确认验收条件）。负责人分配与 Agent 派发是两个独立动作：Codex 经官方
-app-server 创建并提交线程，Claude 经官方深链预填桌面 Code 会话；看板保存派发标识和公开
-线程/运行 ID，不读取 Agent 私有数据库。其余写入仍走 CLI。
+`apps/desktop` 是 Tauri v2 + Vue 3 + TypeScript + Pinia 的桌面版,页面与 `board serve`
+网页是同一份代码。Rust 侧只做两件事:调 `board export --json` 读快照,把界面上的写入
+映射成 CLI 子命令执行(状态切换、`board edit`、`board set --archive`、
+`board align --json`、`board concept-edit --json`),依赖判断、事件记录与完成时的 HEAD
+登记全部留在 Python。
+
+桌面版独有的是派发 Agent:负责人分配与派发是两个独立动作,Codex 经官方 app-server 创建
+并提交线程,Claude 经官方深链预填桌面 Code 会话;看板只保存派发标识和公开的线程/运行 ID,
+不读取两个桌面应用的私有数据库。
 
 ```bash
 cd apps/desktop
@@ -358,6 +379,7 @@ python3 -m pytest tests -q
 swift run --package-path macos/TaskboardMenuBar TaskboardCoreSelfTest
 cd apps/desktop && npm run test && npm run build
 cargo test --manifest-path apps/desktop/src-tauri/Cargo.toml
+cd apps/desktop && npm run build:web   # 前端改动后重新生成 taskboard/web,连同产物提交
 ```
 
 数据模型:`projects`(产品语义为需求/工作流) / `repositories` /

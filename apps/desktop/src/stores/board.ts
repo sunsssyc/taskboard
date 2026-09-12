@@ -1,20 +1,25 @@
 import { computed, ref } from "vue";
 import { acceptHMRUpdate, defineStore } from "pinia";
 import {
+  alignConcept as alignConceptRemote,
   dispatchTaskAgent,
   loadBoardSnapshot,
+  rejectConcept as rejectConceptRemote,
   saveBoardViewPrefs,
   saveProjectArchived,
   saveTaskOwner,
   saveTaskPriority,
   saveTaskStatus,
+  updateConcept as updateConceptRemote,
 } from "../board";
 import type {
   AgentProvider,
+  BoardConcept,
   BoardNote,
   BoardProject,
   BoardSnapshot,
   BoardTask,
+  ConceptEdit,
   TaskOwner,
   TaskPriority,
   TaskStatus,
@@ -92,6 +97,22 @@ export function noteMatches(note: BoardNote, query: string | BoardSearchQuery): 
   );
 }
 
+export function conceptMatches(concept: BoardConcept, query: string | BoardSearchQuery): boolean {
+  const parsed = asSearchQuery(query);
+  if (parsed.kind !== "text") return true;
+
+  const { needle } = parsed;
+  if (!needle) return true;
+  return [
+    concept.title,
+    concept.body,
+    concept.category,
+    concept.repository,
+    `[${concept.id}]`,
+    ...concept.files.map((anchor) => `${anchor.path}:${anchor.symbol}`),
+  ].some((value) => normalized(value).includes(needle));
+}
+
 export function projectMatches(project: BoardProject, query: string | BoardSearchQuery): boolean {
   const parsed = asSearchQuery(query);
   if (parsed.kind !== "text") return false;
@@ -152,6 +173,8 @@ export const useBoardStore = defineStore("board", () => {
   const actionError = ref("");
   const actionNotice = ref("");
   const dispatchingTask = ref("");
+  const conceptBusy = ref<number | null>(null);
+  const writeEnabled = ref(true);
   const source = ref("");
   const loading = ref(false);
   const error = ref("");
@@ -226,13 +249,20 @@ export const useBoardStore = defineStore("board", () => {
     return filteredNotes(project, project.links);
   }
 
+  function filteredConcepts(project: BoardProject): BoardConcept[] {
+    if (statusFilter.value || ownerFilter.value) return [];
+    if (projectMatches(project, query.value)) return project.concepts;
+    return project.concepts.filter((concept) => conceptMatches(concept, query.value));
+  }
+
   function projectHasMatches(project: BoardProject): boolean {
     if (!query.value && !statusFilter.value && !ownerFilter.value) return true;
     return (
       filteredTasks(project).length > 0 ||
       filteredFindings(project).length > 0 ||
       filteredRisks(project).length > 0 ||
-      filteredLinks(project).length > 0
+      filteredLinks(project).length > 0 ||
+      filteredConcepts(project).length > 0
     );
   }
 
@@ -249,6 +279,19 @@ export const useBoardStore = defineStore("board", () => {
   const matchingLinks = computed(() =>
     selectedProject.value ? filteredLinks(selectedProject.value) : [],
   );
+  const matchingConcepts = computed(() =>
+    selectedProject.value ? filteredConcepts(selectedProject.value) : [],
+  );
+  /** 待人确认的概念数:待对齐 + 需重新对齐,跨需求去重(同仓库概念会在多个需求里出现)。 */
+  const pendingConceptCount = computed(() => {
+    const ids = new Set<number>();
+    for (const project of projects.value) {
+      for (const concept of project.concepts) {
+        if (concept.state === "proposed" || concept.state === "stale") ids.add(concept.id);
+      }
+    }
+    return ids.size;
+  });
 
   function selectProject(key: string) {
     selectedProjectKey.value = key;
@@ -425,6 +468,50 @@ export const useBoardStore = defineStore("board", () => {
     }
   }
 
+  async function runConceptAction(
+    id: number,
+    action: () => Promise<BoardConcept>,
+    notice: (concept: BoardConcept) => string,
+  ): Promise<boolean> {
+    actionError.value = "";
+    clearProjectNoticeTimer();
+    actionNotice.value = "";
+    conceptBusy.value = id;
+    try {
+      const concept = await action();
+      await load();
+      showProjectNotice(notice(concept));
+      return true;
+    } catch (reason) {
+      actionError.value = reason instanceof Error ? reason.message : String(reason);
+      return false;
+    } finally {
+      if (conceptBusy.value === id) conceptBusy.value = null;
+    }
+  }
+
+  function alignConcept(id: number, note?: string) {
+    return runConceptAction(id, () => alignConceptRemote(id, note), (concept) =>
+      concept.aligned_commit
+        ? `已对齐 [${concept.id}],锚在 ${concept.aligned_commit};之后锚点文件动过会提示重新对齐。`
+        : `已对齐 [${concept.id}]。`,
+    );
+  }
+
+  function rejectConcept(id: number, reason: string) {
+    return runConceptAction(id, () => rejectConceptRemote(id, reason), (concept) =>
+      `已否决 [${concept.id}] ${concept.title}。`,
+    );
+  }
+
+  function editConcept(id: number, edit: ConceptEdit) {
+    return runConceptAction(id, () => updateConceptRemote(id, edit), (concept) =>
+      (concept as BoardConcept & { alignment_reset?: boolean }).alignment_reset
+        ? `[${concept.id}] 措辞变了,已退回待对齐——当初点头认的是旧那句话。`
+        : `[${concept.id}] 已更新。`,
+    );
+  }
+
   async function load() {
     loading.value = true;
     error.value = "";
@@ -432,6 +519,7 @@ export const useBoardStore = defineStore("board", () => {
       const response = await loadBoardSnapshot();
       snapshot.value = response.snapshot;
       source.value = response.source;
+      writeEnabled.value = response.writeEnabled ?? true;
       // 保存在途时磁盘上的偏好可能落后于界面,不回灌以免刷新打回刚拖好的顺序。
       if (pendingPreferenceSaves === 0) viewPrefs.value = response.viewPrefs;
       if (
@@ -460,6 +548,8 @@ export const useBoardStore = defineStore("board", () => {
     actionError,
     actionNotice,
     dispatchingTask,
+    conceptBusy,
+    writeEnabled,
     source,
     loading,
     error,
@@ -476,10 +566,13 @@ export const useBoardStore = defineStore("board", () => {
     matchingFindings,
     matchingRisks,
     matchingLinks,
+    matchingConcepts,
+    pendingConceptCount,
     filteredTasks,
     filteredFindings,
     filteredRisks,
     filteredLinks,
+    filteredConcepts,
     projectHasMatches,
     selectProject,
     selectAllProjects,
@@ -490,6 +583,9 @@ export const useBoardStore = defineStore("board", () => {
     setTaskPriority,
     setTaskStatus,
     dispatchTask,
+    alignConcept,
+    rejectConcept,
+    editConcept,
     load,
   };
 });

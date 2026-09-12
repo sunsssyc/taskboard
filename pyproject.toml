@@ -16,5 +16,8 @@ board = "taskboard.cli:main"
 [tool.setuptools]
 packages = ["taskboard"]
 
+[tool.setuptools.package-data]
+taskboard = ["web/*", "web/assets/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]

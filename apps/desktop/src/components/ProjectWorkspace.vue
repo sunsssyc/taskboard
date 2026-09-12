@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import ConceptCards from "./ConceptCards.vue";
 import NoteGroups from "./NoteGroups.vue";
 import ReferenceText from "./ReferenceText.vue";
 import TaskGroups from "./TaskGroups.vue";
 import { projectDisplayName } from "../projectName";
 import type { BoardReference, BoardReferenceRequest } from "../references";
-import type { BoardNote, BoardProject, BoardTask } from "../types";
+import type { BoardConcept, BoardNote, BoardProject, BoardTask } from "../types";
 
 const props = defineProps<{
   project: BoardProject;
   tasks: BoardTask[];
+  concepts: BoardConcept[];
   findings: BoardNote[];
   risks: BoardNote[];
   links: BoardNote[];
@@ -21,6 +23,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   showAll: [];
   reference: [reference: BoardReference];
+  focusTask: [ref: number];
 }>();
 
 const taskGroups = ref<InstanceType<typeof TaskGroups> | null>(null);
@@ -158,6 +161,14 @@ onBeforeUnmount(() => summaryResizeObserver?.disconnect());
       :task-refs="taskRefs"
       :note-refs="noteRefs"
       @reference="emit('reference', $event)"
+    />
+
+    <ConceptCards
+      :key="`${project.key}:concepts`"
+      :project-key="project.key"
+      :concepts="concepts"
+      :query="query"
+      @focus-task="$emit('focusTask', $event)"
     />
 
     <NoteGroups
